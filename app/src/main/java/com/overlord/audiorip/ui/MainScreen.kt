@@ -298,7 +298,12 @@ fun MainScreen(
                                 transcriptionError = state.transcriptionError,
                                 geminiApiKey = state.geminiApiKey,
                                 onRequestAiTranscription = { viewModel.requestAiTranscription() },
-                                onSaveApiKey = { viewModel.updateGeminiApiKey(it) }
+                                onSaveApiKey = { viewModel.updateGeminiApiKey(it) },
+                                lockedLineContact = state.lockedLineContact,
+                                isAccessibilityEnabled = state.isAccessibilityEnabled,
+                                onUpdateLockedLineContact = { viewModel.updateLockedLineContact(it) },
+                                onStartLineContactPicker = { viewModel.startLineContactPicker(it) },
+                                onSendTranscriptToLine = { ctx, file, includeAudio -> viewModel.sendTranscriptToLine(ctx, file, includeAudio) }
                             )
                         }
                     }

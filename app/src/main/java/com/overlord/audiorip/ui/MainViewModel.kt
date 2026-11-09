@@ -1,14 +1,18 @@
 package com.overlord.audiorip.ui
 
 import android.app.Application
+import android.content.Context
 import android.media.MediaMetadataRetriever
 import android.net.Uri
 import android.provider.OpenableColumns
+import android.widget.Toast
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import androidx.media3.common.MediaItem
 import androidx.media3.common.Player
 import androidx.media3.exoplayer.ExoPlayer
+import com.overlord.audiorip.core.share.LineDirectShareManager
+import com.overlord.audiorip.core.share.accessibility.AudioRipAccessibilityService
 import com.overlord.audiorip.data.GeminiTranscriptionService
 import com.overlord.audiorip.data.MediaStoreHelper
 import com.overlord.audiorip.data.MultiCutExportMode
@@ -71,7 +75,10 @@ data class UiState(
     val isTranscribing: Boolean = false,
     val transcriptionText: String? = null,
     val transcriptionError: String? = null,
-    val geminiApiKey: String = ""
+    val geminiApiKey: String = "",
+    // LINE Direct & Automated Sharing State
+    val lockedLineContact: String = "",
+    val isAccessibilityEnabled: Boolean = false
 )
 
 class MainViewModel(application: Application) : AndroidViewModel(application) {
@@ -83,14 +90,32 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private var exoPlayer: ExoPlayer? = null
     private var playbackProgressJob: Job? = null
 
+    companion object {
+        private const val PREFS_NAME = "audiorip_config"
+        private const val KEY_LOCKED_LINE_CONTACT = "locked_line_contact"
+    }
+
     init {
         initPlayer()
         loadInitialApiKey()
+        loadInitialLineConfig()
     }
 
     private fun loadInitialApiKey() {
         val savedKey = GeminiTranscriptionService.getSavedApiKey(getApplication())
         _uiState.update { it.copy(geminiApiKey = savedKey) }
+    }
+
+    private fun loadInitialLineConfig() {
+        val prefs = getApplication<Application>().getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        val locked = prefs.getString(KEY_LOCKED_LINE_CONTACT, "") ?: ""
+        val isA11y = AudioRipAccessibilityService.isAccessibilityServiceEnabled(getApplication())
+        _uiState.update {
+            it.copy(
+                lockedLineContact = locked,
+                isAccessibilityEnabled = isA11y
+            )
+        }
     }
 
     private fun initPlayer() {
@@ -505,6 +530,70 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun clearTranscription() {
         _uiState.update { it.copy(transcriptionText = null, transcriptionError = null) }
+    }
+
+    // LINE Direct & Automated Sharing Management
+    fun updateLockedLineContact(contact: String) {
+        val trimmed = contact.trim()
+        val prefs = getApplication<Application>().getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        prefs.edit().putString(KEY_LOCKED_LINE_CONTACT, trimmed).apply()
+        _uiState.update { it.copy(lockedLineContact = trimmed) }
+    }
+
+    fun checkAccessibilityStatus() {
+        val enabled = AudioRipAccessibilityService.isAccessibilityServiceEnabled(getApplication())
+        _uiState.update { it.copy(isAccessibilityEnabled = enabled) }
+    }
+
+    fun startLineContactPicker(context: Context) {
+        AudioRipAccessibilityService.launchLineContactPicker(context) { pickedName ->
+            updateLockedLineContact(pickedName)
+            Toast.makeText(context, "已成功鎖定 LINE 目標: $pickedName", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    fun sendTranscriptToLine(
+        context: Context,
+        audioFile: File? = null,
+        includeAudio: Boolean = false
+    ) {
+        val transcript = _uiState.value.transcriptionText ?: return
+        val target = _uiState.value.lockedLineContact
+
+        checkAccessibilityStatus()
+        val isA11yEnabled = _uiState.value.isAccessibilityEnabled
+
+        if (target.isNotBlank() && isA11yEnabled) {
+            AudioRipAccessibilityService.startAutoShareJob(
+                groupName = target,
+                isTextOnly = !includeAudio || audioFile == null || !audioFile.exists()
+            ) {
+                Toast.makeText(context, "逐字稿已成功發送至 LINE [$target]！", Toast.LENGTH_SHORT).show()
+            }
+
+            val intent = if (includeAudio && audioFile != null && audioFile.exists()) {
+                LineDirectShareManager.createDirectLineAudioAndTextShareIntent(
+                    context = context,
+                    audioFile = audioFile,
+                    messageText = transcript,
+                    targetGroup = target
+                )
+            } else {
+                LineDirectShareManager.createDirectLineTextShareIntent(
+                    context = context,
+                    messageText = transcript,
+                    targetGroup = target
+                )
+            }
+            context.startActivity(intent)
+        } else {
+            val intent = LineDirectShareManager.createLineChooserShareIntent(
+                context = context,
+                messageText = transcript,
+                audioFile = if (includeAudio) audioFile else null
+            )
+            context.startActivity(intent)
+        }
     }
 
     fun deleteExtractedAudio(onFinished: (Boolean) -> Unit = {}) {

@@ -5,12 +5,14 @@ import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.provider.Settings
 import android.widget.Toast
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -26,17 +28,21 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AutoAwesome
+import androidx.compose.material.icons.filled.Chat
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.ErrorOutline
 import androidx.compose.material.icons.filled.Folder
+import androidx.compose.material.icons.filled.Group
 import androidx.compose.material.icons.filled.Key
+import androidx.compose.material.icons.filled.MusicNote
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Send
 import androidx.compose.material.icons.filled.Share
+import androidx.compose.material.icons.filled.TouchApp
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -89,12 +95,20 @@ fun AudioPlayerCard(
     geminiApiKey: String = "",
     onRequestAiTranscription: () -> Unit = {},
     onSaveApiKey: (String) -> Unit = {},
+    // LINE Direct & Automated Sharing props
+    lockedLineContact: String = "",
+    isAccessibilityEnabled: Boolean = false,
+    onUpdateLockedLineContact: (String) -> Unit = {},
+    onStartLineContactPicker: (Context) -> Unit = {},
+    onSendTranscriptToLine: (Context, File?, Boolean) -> Unit = { _, _, _ -> },
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
     var showDeleteConfirmDialog by remember { mutableStateOf(false) }
     var showApiKeyDialog by remember { mutableStateOf(false) }
     var inputApiKey by remember(geminiApiKey) { mutableStateOf(geminiApiKey) }
+    var showContactEditDialog by remember { mutableStateOf(false) }
+    var inputContactName by remember(lockedLineContact) { mutableStateOf(lockedLineContact) }
 
     Card(
         modifier = modifier.fillMaxWidth(),
@@ -370,6 +384,165 @@ fun AudioPlayerCard(
                                 .padding(10.dp)
                                 .verticalScroll(rememberScrollState())
                         )
+
+                        Spacer(modifier = Modifier.height(12.dp))
+
+                        // LINE 跨 App 自動傳送控制區
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .background(MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.25f), RoundedCornerShape(10.dp))
+                                .padding(10.dp)
+                        ) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.SpaceBetween
+                            ) {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    modifier = Modifier.weight(1f)
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.Chat,
+                                        contentDescription = null,
+                                        tint = MaterialTheme.colorScheme.primary,
+                                        modifier = Modifier.size(16.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Text(
+                                        text = if (lockedLineContact.isNotBlank()) "🎯 鎖定目標: $lockedLineContact" else "🎯 尚未設定鎖定目標",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        fontWeight = FontWeight.Bold,
+                                        color = if (lockedLineContact.isNotBlank()) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.error
+                                    )
+                                }
+
+                                // 無障礙狀態提示膠囊
+                                Surface(
+                                    shape = RoundedCornerShape(12.dp),
+                                    color = if (isAccessibilityEnabled) {
+                                        MaterialTheme.colorScheme.primary.copy(alpha = 0.15f)
+                                    } else {
+                                        MaterialTheme.colorScheme.error.copy(alpha = 0.15f)
+                                    },
+                                    modifier = Modifier.clickable {
+                                        if (!isAccessibilityEnabled) {
+                                            try {
+                                                context.startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS).apply {
+                                                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                                                })
+                                                Toast.makeText(context, "請在「已下載的應用程式」中開啟 AudioRip 無障礙服務", Toast.LENGTH_LONG).show()
+                                            } catch (_: Exception) {}
+                                        }
+                                    }
+                                ) {
+                                    Text(
+                                        text = if (isAccessibilityEnabled) "🟢 自動點擊就緒" else "🟡 點此開啟無障礙",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        fontWeight = FontWeight.Bold,
+                                        color = if (isAccessibilityEnabled) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error,
+                                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                                    )
+                                }
+                            }
+
+                            Spacer(modifier = Modifier.height(8.dp))
+
+                            // 目標切換設定按鈕
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(6.dp)
+                            ) {
+                                OutlinedButton(
+                                    onClick = { onStartLineContactPicker(context) },
+                                    modifier = Modifier.weight(1f).height(36.dp),
+                                    shape = RoundedCornerShape(8.dp)
+                                ) {
+                                    Icon(Icons.Default.TouchApp, contentDescription = null, modifier = Modifier.size(14.dp))
+                                    Spacer(modifier = Modifier.width(4.dp))
+                                    Text("在 LINE 點選吸取", style = MaterialTheme.typography.labelMedium)
+                                }
+
+                                OutlinedButton(
+                                    onClick = {
+                                        inputContactName = lockedLineContact
+                                        showContactEditDialog = true
+                                    },
+                                    modifier = Modifier.weight(1f).height(36.dp),
+                                    shape = RoundedCornerShape(8.dp)
+                                ) {
+                                    Icon(Icons.Default.Edit, contentDescription = null, modifier = Modifier.size(14.dp))
+                                    Spacer(modifier = Modifier.width(4.dp))
+                                    Text("手動輸入目標", style = MaterialTheme.typography.labelMedium)
+                                }
+                            }
+
+                            Spacer(modifier = Modifier.height(8.dp))
+
+                            // 主動作 1: 一鍵傳送逐字稿至 LINE
+                            Button(
+                                onClick = {
+                                    if (lockedLineContact.isBlank()) {
+                                        showContactEditDialog = true
+                                        Toast.makeText(context, "請先設定要傳送的 LINE 聯絡人或群組名稱", Toast.LENGTH_SHORT).show()
+                                    } else {
+                                        onSendTranscriptToLine(context, audioFile, false)
+                                    }
+                                },
+                                modifier = Modifier.fillMaxWidth().height(42.dp),
+                                shape = RoundedCornerShape(10.dp),
+                                colors = ButtonDefaults.buttonColors(
+                                    containerColor = MaterialTheme.colorScheme.primary
+                                )
+                            ) {
+                                Icon(Icons.Default.Send, contentDescription = null, modifier = Modifier.size(16.dp))
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text(
+                                    text = if (lockedLineContact.isNotBlank()) "一鍵傳送逐字稿至 [$lockedLineContact]" else "一鍵傳送逐字稿至 LINE",
+                                    fontWeight = FontWeight.Bold,
+                                    style = MaterialTheme.typography.bodyMedium
+                                )
+                            }
+
+                            Spacer(modifier = Modifier.height(6.dp))
+
+                            // 次要動作 2: 音訊與逐字稿一同傳送 & 選擇其他好友
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(6.dp)
+                            ) {
+                                OutlinedButton(
+                                    onClick = {
+                                        if (lockedLineContact.isBlank()) {
+                                            showContactEditDialog = true
+                                            Toast.makeText(context, "請先設定要傳送的 LINE 聯絡人或群組名稱", Toast.LENGTH_SHORT).show()
+                                        } else {
+                                            onSendTranscriptToLine(context, audioFile, true)
+                                        }
+                                    },
+                                    modifier = Modifier.weight(1f).height(38.dp),
+                                    shape = RoundedCornerShape(8.dp)
+                                ) {
+                                    Icon(Icons.Default.MusicNote, contentDescription = null, modifier = Modifier.size(14.dp))
+                                    Spacer(modifier = Modifier.width(4.dp))
+                                    Text("音訊+逐字稿同發", style = MaterialTheme.typography.labelMedium)
+                                }
+
+                                OutlinedButton(
+                                    onClick = {
+                                        // 自由選擇其他好友 (不鎖定單一目標)
+                                        onSendTranscriptToLine(context, null, false)
+                                    },
+                                    modifier = Modifier.weight(1f).height(38.dp),
+                                    shape = RoundedCornerShape(8.dp)
+                                ) {
+                                    Icon(Icons.Default.Group, contentDescription = null, modifier = Modifier.size(14.dp))
+                                    Spacer(modifier = Modifier.width(4.dp))
+                                    Text("選其他 LINE 好友", style = MaterialTheme.typography.labelMedium)
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -510,6 +683,53 @@ fun AudioPlayerCard(
             },
             dismissButton = {
                 TextButton(onClick = { showApiKeyDialog = false }) {
+                    Text("取消")
+                }
+            }
+        )
+    }
+
+    // LINE Locked Contact Edit Dialog
+    if (showContactEditDialog) {
+        AlertDialog(
+            onDismissRequest = { showContactEditDialog = false },
+            title = { Text("設定鎖定 LINE 聯絡人 / 群組") },
+            text = {
+                Column {
+                    Text(
+                        text = "輸入欲自動發送的 LINE 聯絡人或群組名稱（須與 LINE 中的名稱完全一致，尾端人數括號如 (15) 可略）。",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Spacer(modifier = Modifier.height(10.dp))
+                    OutlinedTextField(
+                        value = inputContactName,
+                        onValueChange = { inputContactName = it },
+                        label = { Text("LINE 聯絡人 / 群組名稱") },
+                        placeholder = { Text("例: 核心團隊、現場助理") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        val trimmed = inputContactName.trim()
+                        if (trimmed.isNotBlank()) {
+                            onUpdateLockedLineContact(trimmed)
+                            showContactEditDialog = false
+                            Toast.makeText(context, "已鎖定 LINE 目標: $trimmed", Toast.LENGTH_SHORT).show()
+                        } else {
+                            Toast.makeText(context, "名稱不能為空", Toast.LENGTH_SHORT).show()
+                        }
+                    }
+                ) {
+                    Text("確定儲存")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showContactEditDialog = false }) {
                     Text("取消")
                 }
             }

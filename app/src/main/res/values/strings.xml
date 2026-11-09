@@ -11,4 +11,5 @@
     <string name="engine_native">原生無損分離 (M4A · 推薦)</string>
     <string name="engine_ffmpeg">全格式轉碼 (MP3 / WAV / FLAC)</string>
     <string name="trim_switch">自訂裁剪區間</string>
+    <string name="accessibility_service_description">AudioRip 自動化傳送服務：輔助一鍵將 AI 逐字稿與音訊安全傳送至指定鎖定的 LINE 群組或聯絡人。</string>
 </resources>

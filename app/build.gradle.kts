@@ -12,8 +12,8 @@ android {
         applicationId = "com.overlord.audiorip"
         minSdk = 26
         targetSdk = 34
-        versionCode = 2026092702
-        versionName = "20260927_1920"
+        versionCode = 202611091
+        versionName = "20261109_1300"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables {
@@ -72,6 +72,8 @@ dependencies {
 
     // Coroutines
     implementation(libs.kotlinx.coroutines.android)
+
+    testImplementation(libs.junit)
 
     debugImplementation(libs.androidx.ui.tooling)
 }

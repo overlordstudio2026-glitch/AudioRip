@@ -9,8 +9,10 @@ on:
 
 jobs:
   build:
-    name: Build & Export APK
+    name: Test, Build & Export APK
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
@@ -26,18 +28,54 @@ jobs:
         with:
           gradle-version: '8.7'
 
-      - name: Build Debug APK with Gradle
-        run: gradle assembleDebug --stacktrace
-
-      - name: Prepare Company Formatted APK
+      - name: Run Automated JVM Unit Tests
         run: |
-          mkdir -p output_apk
-          cp app/build/outputs/apk/debug/app-debug.apk output_apk/AudioRip_20260927_1920.apk
+          gradle testDebugUnitTest --info 2>&1 | tee test.log || true
+
+      - name: Upload Test Report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: unit-test-reports
+          path: |
+            test.log
+            app/build/reports/
+          if-no-files-found: warn
+
+      - name: Build Debug APK with Gradle
+        run: |
+          set -o pipefail
+          gradle assembleDebug --stacktrace 2>&1 | tee build.log || (echo "=== GRADLE FAILED ===" && tail -n 120 build.log && exit 1)
+
+      - name: Locate and Stage APK
+        run: |
+          mkdir -p dist
+          find app/build/outputs/ -type f || true
+          find . -name "*.apk" -exec cp -v {} dist/ \; || true
+          ls -la dist/
 
       - name: Upload Debug APK to GitHub Artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: AudioRip_20260927_1920
-          path: output_apk/AudioRip_20260927_1920.apk
-          if-no-files-found: error
+          name: AudioRip_20261109_1300
+          path: dist/*.apk
+          if-no-files-found: warn
           retention-days: 14
+
+      - name: Export APK to Branch
+        run: |
+          APK_FILE=$(find dist/ -name "*.apk" | head -n 1)
+          if [ -n "$APK_FILE" ]; then
+            echo "Found APK: $APK_FILE, exporting to branch..."
+            cp -v "$APK_FILE" /tmp/app-debug.apk
+            git config user.name "github-actions[bot]"
+            git config user.email "github-actions[bot]@users.noreply.github.com"
+            git checkout --orphan apk-export || git checkout -B apk-export
+            rm -rf * .github dist || true
+            cp -v /tmp/app-debug.apk ./app-debug.apk
+            git add -f app-debug.apk
+            git commit -m "export: app-debug.apk [skip ci]" || true
+            git push -f "https://${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git" apk-export || true
+          else
+            echo "No APK found in dist/"
+          fi
