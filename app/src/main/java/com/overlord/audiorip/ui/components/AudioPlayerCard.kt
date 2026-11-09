@@ -94,6 +94,9 @@ fun AudioPlayerCard(
     onTranscriptionTextChange: (String) -> Unit = {},
     transcriptionError: String? = null,
     geminiApiKey: String = "",
+    promptTemplate: String = "",
+    onPromptTemplateChange: (String) -> Unit = {},
+    onResetPromptTemplate: () -> Unit = {},
     onRequestAiTranscription: () -> Unit = {},
     onStartFreeGeminiAutomation: (Context) -> Unit = {},
     onSaveApiKey: (String) -> Unit = {},
@@ -262,6 +265,59 @@ fun AudioPlayerCard(
                 modifier = Modifier.fillMaxWidth(),
                 shape = RoundedCornerShape(10.dp)
             )
+
+            Spacer(modifier = Modifier.height(10.dp))
+
+            // 預先生成且可隨時編輯、自動記憶的「轉逐字稿送出文字 (Prompt)」設定區塊
+            Surface(
+                shape = RoundedCornerShape(12.dp),
+                color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f),
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.35f)),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Column(modifier = Modifier.padding(10.dp)) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = "📝 轉逐字稿送出文字 (可直接編輯・自動記憶)",
+                            style = MaterialTheme.typography.labelMedium,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                        TextButton(
+                            onClick = {
+                                onResetPromptTemplate()
+                                Toast.makeText(context, "已恢復預設轉逐字稿送出文字範本", Toast.LENGTH_SHORT).show()
+                            },
+                            contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 6.dp, vertical = 0.dp),
+                            modifier = Modifier.height(26.dp)
+                        ) {
+                            Text("恢復預設", style = MaterialTheme.typography.labelSmall)
+                        }
+                    }
+
+                    OutlinedTextField(
+                        value = promptTemplate,
+                        onValueChange = onPromptTemplateChange,
+                        placeholder = { Text("請輸入要送給 Gemini 的轉逐字稿指令文字...") },
+                        textStyle = MaterialTheme.typography.bodySmall.copy(lineHeight = 18.sp),
+                        minLines = 2,
+                        maxLines = 5,
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(8.dp)
+                    )
+
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text(
+                        text = "💡 送出時將自動在結尾附加上方「活動時間」與「活動名稱」，並自動填入 Gemini 對話框送出。",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
 
             Spacer(modifier = Modifier.height(14.dp))
 
@@ -575,15 +631,23 @@ fun AudioPlayerCard(
                 },
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(44.dp),
+                    .height(46.dp),
                 shape = RoundedCornerShape(12.dp),
+                contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 12.dp, vertical = 6.dp),
                 colors = ButtonDefaults.buttonColors(
                     containerColor = MaterialTheme.colorScheme.tertiary
                 )
             ) {
-                Icon(imageVector = Icons.Default.Send, contentDescription = null, modifier = Modifier.size(18.dp))
-                Spacer(modifier = Modifier.width(8.dp))
-                Text(text = "🤖 免 API 自動傳送 Gemini 並取回逐字稿", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Bold)
+                Icon(imageVector = Icons.Default.Send, contentDescription = null, modifier = Modifier.size(16.dp))
+                Spacer(modifier = Modifier.width(6.dp))
+                Text(
+                    text = "🤖 免 API 自動傳送 Gemini 並取回逐字稿",
+                    style = MaterialTheme.typography.bodyMedium.copy(fontSize = 13.5.sp),
+                    fontWeight = FontWeight.Bold,
+                    maxLines = 1,
+                    softWrap = false,
+                    overflow = TextOverflow.Ellipsis
+                )
             }
 
             Spacer(modifier = Modifier.height(8.dp))

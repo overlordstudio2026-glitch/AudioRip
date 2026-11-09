@@ -111,6 +111,8 @@ class MainActivity : ComponentActivity() {
                     ?: intent.getStringExtra("extra_activity_name")
                 val lockedContact = intent.getStringExtra("EXTRA_LOCKED_LINE_CONTACT")
                     ?: intent.getStringExtra("extra_locked_line_contact")
+                val customPrompt = intent.getStringExtra("EXTRA_PROMPT_TEMPLATE")
+                    ?: intent.getStringExtra("extra_prompt_template")
 
                 viewModel.loadMedia(
                     uri = mediaUri,
@@ -119,7 +121,8 @@ class MainActivity : ComponentActivity() {
                     callerVideoName = videoName,
                     callerVideoFolder = videoFolder,
                     customActivityName = activityName,
-                    customLockedLineContact = lockedContact
+                    customLockedLineContact = lockedContact,
+                    customPromptTemplate = customPrompt
                 )
             }
         }

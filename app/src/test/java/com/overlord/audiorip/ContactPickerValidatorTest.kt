@@ -82,4 +82,31 @@ class ContactPickerValidatorTest {
         )
         assertEquals(sampleTranscript, extracted)
     }
+
+    @Test
+    fun testGeminiHostPackageAndPromptHelpers() {
+        // 同時支援獨立 Gemini App 殼層與 Google 主程式承載之 Gemini 對話視窗
+        assertTrue(ContactPickerValidator.isGeminiHostPackage("com.google.android.apps.bard"))
+        assertTrue(ContactPickerValidator.isGeminiHostPackage("com.google.android.googlequicksearchbox"))
+        assertFalse(ContactPickerValidator.isGeminiHostPackage("jp.naver.line.android"))
+
+        // 驗證輸入框佔位提示詞辨識
+        assertTrue(ContactPickerValidator.isGeminiPromptInputPlaceholder("向 Gemini 提問", null, null, null))
+        assertTrue(ContactPickerValidator.isGeminiPromptInputPlaceholder(null, "Ask Gemini", null, null))
+        assertTrue(ContactPickerValidator.isGeminiPromptInputPlaceholder(null, null, "輸入提示", null))
+        assertFalse(ContactPickerValidator.isGeminiPromptInputPlaceholder("傳送", null, null, null))
+
+        // 驗證自訂送出文字組合與已填入檢查
+        val customPrompt = ContactPickerValidator.buildFinalTranscriptionPrompt(
+            customInstruction = "請轉成逐字稿並加上時間軸",
+            activityTime = "2026-11-09 22:30",
+            activityName = "專案檢討會"
+        )
+        assertTrue(customPrompt.contains("請轉成逐字稿並加上時間軸"))
+        assertTrue(customPrompt.contains("【活動時間】：2026-11-09 22:30"))
+        assertTrue(customPrompt.contains("【活動名稱】：專案檢討會"))
+
+        assertTrue(ContactPickerValidator.isGeminiPromptAlreadyFilled(customPrompt, customPrompt))
+        assertFalse(ContactPickerValidator.isGeminiPromptAlreadyFilled("向 Gemini 提問", customPrompt))
+    }
 }

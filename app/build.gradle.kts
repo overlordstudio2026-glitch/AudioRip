@@ -12,8 +12,8 @@ android {
         applicationId = "com.overlord.audiorip"
         minSdk = 26
         targetSdk = 34
-        versionCode = 202611092
-        versionName = "20261109_1850"
+        versionCode = 202611093
+        versionName = "20261109_2340"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables {

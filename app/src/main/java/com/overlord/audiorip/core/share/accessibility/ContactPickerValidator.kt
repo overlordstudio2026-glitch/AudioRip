@@ -182,11 +182,32 @@ object ContactPickerValidator {
     }
 
     // ══════════════════════════════════════════════════════════════════════════
-    // Gemini App (com.google.android.apps.bard) 自動化節點辨識輔助方法
+    // Gemini App (com.google.android.apps.bard / googlequicksearchbox) 自動化節點辨識輔助方法
     // ══════════════════════════════════════════════════════════════════════════
 
+    const val DEFAULT_TRANSCRIPTION_PROMPT_TEMPLATE =
+        "請幫我將這段音訊完整轉成繁體中文逐字稿（保留原意、加上標點符號與分段），並在最後條列出重點摘要與行動待辦事項。"
+
+    private val GEMINI_HOST_PACKAGES = setOf(
+        "com.google.android.apps.bard",
+        "com.google.android.googlequicksearchbox"
+    )
+
+    private val GEMINI_INPUT_HINT_KEYWORDS = listOf(
+        "向 gemini 提問",
+        "詢問 gemini",
+        "ask gemini",
+        "輸入提示",
+        "新增提示",
+        "新增說明",
+        "enter a prompt",
+        "add a prompt",
+        "type a message",
+        "輸入訊息"
+    )
+
     private val GEMINI_SEND_KEYWORDS = setOf(
-        "傳送", "發送", "送出", "提交", "send", "submit", "send message", "傳送訊息"
+        "傳送", "發送", "送出", "提交", "send", "submit", "send message", "傳送訊息", "傳送提示", "send prompt"
     )
 
     private val GEMINI_STOP_KEYWORDS = setOf(
@@ -198,6 +219,68 @@ object ContactPickerValidator {
     )
 
     /**
+     * 判定當前視窗套件是否為 Gemini App 或承載 Gemini 對話視窗的 Google App
+     */
+    fun isGeminiHostPackage(pkg: String?): Boolean {
+        if (pkg.isNullOrBlank()) return false
+        return GEMINI_HOST_PACKAGES.contains(pkg.trim())
+    }
+
+    /**
+     * 組合使用者自訂的轉逐字稿送出文字與活動時間、活動名稱
+     */
+    fun buildFinalTranscriptionPrompt(
+        customInstruction: String,
+        activityTime: String,
+        activityName: String
+    ): String {
+        val base = customInstruction.trim().ifBlank { DEFAULT_TRANSCRIPTION_PROMPT_TEMPLATE }
+        val timeLine = if (activityTime.isNotBlank()) "\n【活動時間】：${activityTime.trim()}" else ""
+        val nameLine = if (activityName.isNotBlank()) "\n【活動名稱】：${activityName.trim()}" else ""
+        return "$base$timeLine$nameLine"
+    }
+
+    /**
+     * 判定是否為 Gemini 底部提示詞輸入框或未展開前的佔位提示節點
+     */
+    fun isGeminiPromptInputPlaceholder(
+        text: String?,
+        contentDesc: String?,
+        hintText: String? = null,
+        viewId: String? = null
+    ): Boolean {
+        val txt = text?.trim()?.lowercase() ?: ""
+        val desc = contentDesc?.trim()?.lowercase() ?: ""
+        val hint = hintText?.trim()?.lowercase() ?: ""
+        val id = viewId?.trim()?.lowercase() ?: ""
+
+        if (GEMINI_INPUT_HINT_KEYWORDS.any { txt == it || desc == it || hint == it || txt.contains(it) || hint.contains(it) }) {
+            return true
+        }
+        if (id.contains("input_box") || id.contains("prompt_input") || id.contains("chat_input") ||
+            id.contains("edit_text") || id.contains("query_input")
+        ) {
+            return true
+        }
+        return false
+    }
+
+    /**
+     * 檢查 Gemini 輸入框目前的文字是否已成功填入目標提示詞（排除預設空白提示字）
+     */
+    fun isGeminiPromptAlreadyFilled(currentNodeText: String?, targetPrompt: String): Boolean {
+        if (currentNodeText.isNullOrBlank() || targetPrompt.isBlank()) return false
+        val cleanCurrent = currentNodeText.trim()
+        val cleanTarget = targetPrompt.trim()
+        if (GEMINI_INPUT_HINT_KEYWORDS.any { cleanCurrent.equals(it, ignoreCase = true) }) {
+            return false
+        }
+        if (cleanCurrent == cleanTarget) return true
+        val prefix = cleanTarget.lineSequence().firstOrNull()?.trim()?.take(12) ?: cleanTarget.take(12)
+        return prefix.length >= 4 && cleanCurrent.contains(prefix)
+    }
+
+    /**
      * 判定是否為 Gemini App 的「傳送 / Send」按鈕
      */
     fun isGeminiSendButton(text: String?, contentDesc: String?, viewId: String? = null): Boolean {
@@ -205,11 +288,12 @@ object ContactPickerValidator {
         val desc = contentDesc?.trim()?.lowercase() ?: ""
         val id = viewId?.trim()?.lowercase() ?: ""
 
+        if (isGeminiStopGeneratingButton(text, contentDesc, viewId)) return false
         if (GEMINI_SEND_KEYWORDS.any { txt == it || desc == it }) return true
-        if (desc.contains("傳送") || desc.contains("發送") || desc.contains("send")) {
-            if (!desc.contains("停止") && !desc.contains("stop")) return true
+        if (desc.contains("傳送") || desc.contains("發送") || desc.contains("送出") || desc.contains("send") || desc.contains("submit")) {
+            if (!desc.contains("停止") && !desc.contains("stop") && !desc.contains("傳送對象")) return true
         }
-        if (id.contains("send") && !id.contains("stop")) return true
+        if ((id.contains("send") || id.contains("submit")) && !id.contains("stop")) return true
         return false
     }
 
@@ -250,14 +334,15 @@ object ContactPickerValidator {
      */
     fun extractBestGeminiTranscriptFromTexts(texts: List<String>, promptText: String): String? {
         val cleanPrompt = promptText.trim()
-        val promptPrefix = cleanPrompt.take(24)
+        val promptPrefix = cleanPrompt.lineSequence().firstOrNull()?.trim()?.take(16) ?: cleanPrompt.take(24)
 
         val candidates = texts.map { it.trim() }.filter { cand ->
             if (cand.length < 25) return@filter false
-            if (cleanPrompt.isNotEmpty() && (cand == cleanPrompt || (promptPrefix.isNotEmpty() && cand.startsWith(promptPrefix)))) {
+            if (cleanPrompt.isNotEmpty() && (cand == cleanPrompt || (promptPrefix.length >= 6 && cand.startsWith(promptPrefix)))) {
                 return@filter false
             }
-            if (cand.startsWith("請幫我將這段音訊轉成繁體中文逐字稿")) return@filter false
+            if (cand.startsWith("請幫我將這段音訊")) return@filter false
+            if (GEMINI_INPUT_HINT_KEYWORDS.any { cand.lowercase().startsWith(it) }) return@filter false
             true
         }
 

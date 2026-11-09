@@ -13,6 +13,7 @@ import androidx.media3.common.Player
 import androidx.media3.exoplayer.ExoPlayer
 import com.overlord.audiorip.core.share.LineDirectShareManager
 import com.overlord.audiorip.core.share.accessibility.AudioRipAccessibilityService
+import com.overlord.audiorip.core.share.accessibility.ContactPickerValidator
 import com.overlord.audiorip.data.GeminiTranscriptionService
 import com.overlord.audiorip.data.MediaStoreHelper
 import com.overlord.audiorip.data.MultiCutExportMode
@@ -76,6 +77,7 @@ data class UiState(
     val transcriptionText: String? = null,
     val transcriptionError: String? = null,
     val geminiApiKey: String = "",
+    val promptTemplate: String = ContactPickerValidator.DEFAULT_TRANSCRIPTION_PROMPT_TEMPLATE,
     // LINE Direct & Automated Sharing State
     val lockedLineContact: String = "",
     val isAccessibilityEnabled: Boolean = false,
@@ -107,7 +109,23 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     private fun loadInitialApiKey() {
         val savedKey = GeminiTranscriptionService.getSavedApiKey(getApplication())
-        _uiState.update { it.copy(geminiApiKey = savedKey) }
+        val savedPrompt = GeminiTranscriptionService.getSavedPromptTemplate(getApplication())
+        _uiState.update {
+            it.copy(
+                geminiApiKey = savedKey,
+                promptTemplate = savedPrompt
+            )
+        }
+    }
+
+    fun updatePromptTemplate(newTemplate: String) {
+        _uiState.update { it.copy(promptTemplate = newTemplate) }
+        GeminiTranscriptionService.savePromptTemplate(getApplication(), newTemplate)
+    }
+
+    fun resetPromptTemplate() {
+        val defaultTpl = GeminiTranscriptionService.resetPromptTemplate(getApplication())
+        _uiState.update { it.copy(promptTemplate = defaultTpl) }
     }
 
     private fun loadInitialLineConfig() {
@@ -190,12 +208,16 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         callerVideoName: String? = null,
         callerVideoFolder: String? = null,
         customActivityName: String? = null,
-        customLockedLineContact: String? = null
+        customLockedLineContact: String? = null,
+        customPromptTemplate: String? = null
     ) {
         viewModelScope.launch {
             stopAudio()
             if (!customLockedLineContact.isNullOrBlank()) {
                 updateLockedLineContact(customLockedLineContact)
+            }
+            if (!customPromptTemplate.isNullOrBlank()) {
+                updatePromptTemplate(customPromptTemplate)
             }
             _uiState.update {
                 it.copy(
@@ -516,7 +538,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val effectiveTime = state.activityTime.ifBlank {
             SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefault()).format(Date())
         }
-        val promptText = "請幫我將這段音訊轉成繁體中文逐字稿，並條列出重點摘要與發言重點：\n【活動時間】：$effectiveTime\n【活動名稱】：$effectiveName"
+        val promptText = ContactPickerValidator.buildFinalTranscriptionPrompt(
+            customInstruction = state.promptTemplate,
+            activityTime = effectiveTime,
+            activityName = effectiveName
+        )
 
         _uiState.update {
             it.copy(isTranscribing = true, transcriptionError = null)
@@ -578,7 +604,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val effectiveTime = state.activityTime.ifBlank {
             SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefault()).format(Date())
         }
-        val promptText = "請幫我將這段音訊轉成繁體中文逐字稿，並條列出重點摘要與發言重點：\n【活動時間】：$effectiveTime\n【活動名稱】：$effectiveName"
+        val promptText = ContactPickerValidator.buildFinalTranscriptionPrompt(
+            customInstruction = state.promptTemplate,
+            activityTime = effectiveTime,
+            activityName = effectiveName
+        )
 
         try {
             val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as? android.content.ClipboardManager
@@ -615,7 +645,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
         try {
             context.startActivity(shareIntent)
-            Toast.makeText(context, "已送往 Gemini，生成完成後將自動複製並取回逐字稿！", Toast.LENGTH_SHORT).show()
+            Toast.makeText(context, "已送往 Gemini，將自動填入送出文字並取回逐字稿！", Toast.LENGTH_SHORT).show()
         } catch (_: Exception) {
             val fallbackIntent = MediaStoreHelper.createShareWithPromptIntent(
                 context = context,
@@ -638,8 +668,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         clipboardText: String?,
         scrapedFallbackText: String?
     ) {
+        val currentTplPrefix = _uiState.value.promptTemplate.trim().lineSequence().firstOrNull()?.trim()?.take(12) ?: ""
         val cleanClip = clipboardText?.trim()?.takeIf {
-            it.isNotBlank() && !it.startsWith("請幫我將這段音訊轉成繁體中文逐字稿")
+            it.isNotBlank() &&
+                !it.startsWith("請幫我將這段音訊") &&
+                (currentTplPrefix.length < 4 || !it.startsWith(currentTplPrefix))
         }
         val finalTranscript = cleanClip ?: scrapedFallbackText?.trim()?.takeIf { it.isNotBlank() } ?: return
 
