@@ -295,15 +295,19 @@ fun MainScreen(
                                 onDeleteClick = { viewModel.deleteExtractedAudio() },
                                 isTranscribing = state.isTranscribing,
                                 transcriptionText = state.transcriptionText,
+                                onTranscriptionTextChange = { viewModel.updateTranscriptionText(it) },
                                 transcriptionError = state.transcriptionError,
                                 geminiApiKey = state.geminiApiKey,
                                 onRequestAiTranscription = { viewModel.requestAiTranscription() },
+                                onStartFreeGeminiAutomation = { viewModel.startFreeGeminiAppAutomation(it) },
                                 onSaveApiKey = { viewModel.updateGeminiApiKey(it) },
                                 lockedLineContact = state.lockedLineContact,
                                 isAccessibilityEnabled = state.isAccessibilityEnabled,
                                 onUpdateLockedLineContact = { viewModel.updateLockedLineContact(it) },
                                 onStartLineContactPicker = { viewModel.startLineContactPicker(it) },
-                                onSendTranscriptToLine = { ctx, file, includeAudio -> viewModel.sendTranscriptToLine(ctx, file, includeAudio) }
+                                onSendTranscriptToLine = { ctx, file, includeAudio -> viewModel.sendTranscriptToLine(ctx, file, includeAudio) },
+                                callerPackage = state.callerPackage,
+                                onReturnTranscriptToCaller = { viewModel.returnTranscriptToCaller(it) }
                             )
                         }
                     }

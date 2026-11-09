@@ -59,4 +59,27 @@ class ContactPickerValidatorTest {
         assertFalse(ContactPickerValidator.isValidContactName("下午 03:20"))
         assertFalse(ContactPickerValidator.isValidContactName("10月28日"))
     }
+
+    @Test
+    fun testGeminiNodeValidators() {
+        assertTrue(ContactPickerValidator.isGeminiSendButton(null, "傳送", null))
+        assertTrue(ContactPickerValidator.isGeminiSendButton(null, "Send message", null))
+        assertFalse(ContactPickerValidator.isGeminiSendButton(null, "停止生成", null))
+
+        assertTrue(ContactPickerValidator.isGeminiStopGeneratingButton(null, "停止生成", null))
+        assertTrue(ContactPickerValidator.isGeminiStopGeneratingButton("停止", null, null))
+        assertFalse(ContactPickerValidator.isGeminiStopGeneratingButton("傳送", null, null))
+
+        assertTrue(ContactPickerValidator.isGeminiCopyButton(null, "複製", null))
+        assertTrue(ContactPickerValidator.isGeminiCopyButton("複製文字", null, null))
+        assertFalse(ContactPickerValidator.isGeminiCopyButton(null, "複製連結", null))
+
+        val prompt = "請幫我將這段音訊轉成繁體中文逐字稿，並條列出重點摘要與發言重點：\n【活動時間】：2026-11-09\n【活動名稱】：現場活動"
+        val sampleTranscript = "【重點摘要】\n1. 主席致詞感謝鄉親支持\n2. 說明未來地方建設規畫\n\n【完整逐字稿】\n各位鄉親大家好，今天非常高興來到現場..."
+        val extracted = ContactPickerValidator.extractBestGeminiTranscriptFromTexts(
+            listOf("Gemini", prompt, sampleTranscript, "複製"),
+            prompt
+        )
+        assertEquals(sampleTranscript, extracted)
+    }
 }

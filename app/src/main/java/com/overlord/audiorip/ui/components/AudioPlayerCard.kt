@@ -91,9 +91,11 @@ fun AudioPlayerCard(
     // Automated AI Transcription props
     isTranscribing: Boolean = false,
     transcriptionText: String? = null,
+    onTranscriptionTextChange: (String) -> Unit = {},
     transcriptionError: String? = null,
     geminiApiKey: String = "",
     onRequestAiTranscription: () -> Unit = {},
+    onStartFreeGeminiAutomation: (Context) -> Unit = {},
     onSaveApiKey: (String) -> Unit = {},
     // LINE Direct & Automated Sharing props
     lockedLineContact: String = "",
@@ -101,6 +103,8 @@ fun AudioPlayerCard(
     onUpdateLockedLineContact: (String) -> Unit = {},
     onStartLineContactPicker: (Context) -> Unit = {},
     onSendTranscriptToLine: (Context, File?, Boolean) -> Unit = { _, _, _ -> },
+    callerPackage: String? = null,
+    onReturnTranscriptToCaller: (Context) -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
@@ -373,17 +377,32 @@ fun AudioPlayerCard(
 
                         Spacer(modifier = Modifier.height(8.dp))
 
-                        Text(
-                            text = transcript,
-                            style = MaterialTheme.typography.bodySmall,
-                            lineHeight = 20.sp,
+                        OutlinedTextField(
+                            value = transcript,
+                            onValueChange = onTranscriptionTextChange,
+                            label = { Text("逐字稿檢查與修正 (可直接點擊修改內容)") },
+                            textStyle = MaterialTheme.typography.bodySmall.copy(lineHeight = 20.sp),
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .height(160.dp)
-                                .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f), RoundedCornerShape(8.dp))
-                                .padding(10.dp)
-                                .verticalScroll(rememberScrollState())
+                                .height(180.dp),
+                            shape = RoundedCornerShape(8.dp)
                         )
+
+                        if (!callerPackage.isNullOrBlank()) {
+                            Spacer(modifier = Modifier.height(8.dp))
+                            Button(
+                                onClick = { onReturnTranscriptToCaller(context) },
+                                modifier = Modifier.fillMaxWidth().height(40.dp),
+                                shape = RoundedCornerShape(8.dp),
+                                colors = ButtonDefaults.buttonColors(
+                                    containerColor = MaterialTheme.colorScheme.secondary
+                                )
+                            ) {
+                                Icon(Icons.Default.Send, contentDescription = null, modifier = Modifier.size(16.dp))
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text("🔙 將修正後逐字稿傳回錄影 App (OmniCamPro)", fontWeight = FontWeight.Bold)
+                            }
+                        }
 
                         Spacer(modifier = Modifier.height(12.dp))
 
@@ -549,43 +568,10 @@ fun AudioPlayerCard(
 
             Spacer(modifier = Modifier.height(8.dp))
 
-            // Track 2: Original Zero-API System Share (100% Reliable Fallback)
+            // Track 2: 免 API 自動傳送至 Gemini 並自動複製取回逐字稿
             Button(
                 onClick = {
-                    val mime = getMimeTypeFromFileName(audioFile.name)
-                    val effectiveName = activityName.ifBlank { audioFile.nameWithoutExtension }
-                    val promptText = "請幫我將這段音訊轉成繁體中文逐字稿，並條列出重點摘要與發言重點：\n【活動時間】：$activityTime\n【活動名稱】：$effectiveName"
-
-                    // Auto copy prompt to clipboard
-                    try {
-                        val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-                        val clip = ClipData.newPlainText("GeminiPrompt", promptText)
-                        clipboard.setPrimaryClip(clip)
-                        Toast.makeText(context, "已複製指令！音訊準備傳送至 Gemini", Toast.LENGTH_SHORT).show()
-                    } catch (_: Exception) {}
-
-                    val geminiPackage = "com.google.android.apps.bard"
-                    val isGeminiInstalled = isPackageInstalled(context, geminiPackage)
-
-                    val shareIntent = MediaStoreHelper.createShareWithPromptIntent(
-                        context = context,
-                        audioFile = audioFile,
-                        mimeType = mime,
-                        promptText = promptText,
-                        targetPackage = if (isGeminiInstalled) geminiPackage else null
-                    )
-
-                    try {
-                        context.startActivity(shareIntent)
-                    } catch (_: Exception) {
-                        val fallbackIntent = MediaStoreHelper.createShareWithPromptIntent(
-                            context = context,
-                            audioFile = audioFile,
-                            mimeType = mime,
-                            promptText = promptText
-                        )
-                        context.startActivity(Intent.createChooser(fallbackIntent, "選擇 Gemini 或其他 App"))
-                    }
+                    onStartFreeGeminiAutomation(context)
                 },
                 modifier = Modifier
                     .fillMaxWidth()
@@ -597,7 +583,7 @@ fun AudioPlayerCard(
             ) {
                 Icon(imageVector = Icons.Default.Send, contentDescription = null, modifier = Modifier.size(18.dp))
                 Spacer(modifier = Modifier.width(8.dp))
-                Text(text = "免 API 傳送至 Gemini (系統分享備用)", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Bold)
+                Text(text = "🤖 免 API 自動傳送 Gemini 並取回逐字稿", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Bold)
             }
 
             Spacer(modifier = Modifier.height(8.dp))

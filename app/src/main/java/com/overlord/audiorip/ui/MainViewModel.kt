@@ -78,7 +78,11 @@ data class UiState(
     val geminiApiKey: String = "",
     // LINE Direct & Automated Sharing State
     val lockedLineContact: String = "",
-    val isAccessibilityEnabled: Boolean = false
+    val isAccessibilityEnabled: Boolean = false,
+    // Cross-App Caller State (e.g. from OmniCamPro)
+    val callerPackage: String? = null,
+    val callerVideoName: String? = null,
+    val callerVideoFolder: String? = null
 )
 
 class MainViewModel(application: Application) : AndroidViewModel(application) {
@@ -179,19 +183,33 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    fun loadMedia(uri: Uri) {
+    fun loadMedia(
+        uri: Uri,
+        autoStartPipeline: Boolean = false,
+        callerPackage: String? = null,
+        callerVideoName: String? = null,
+        callerVideoFolder: String? = null,
+        customActivityName: String? = null,
+        customLockedLineContact: String? = null
+    ) {
         viewModelScope.launch {
             stopAudio()
+            if (!customLockedLineContact.isNullOrBlank()) {
+                updateLockedLineContact(customLockedLineContact)
+            }
             _uiState.update {
                 it.copy(
                     extractionState = ExtractionState.Idle,
                     transcriptionText = null,
-                    transcriptionError = null
+                    transcriptionError = null,
+                    callerPackage = callerPackage ?: it.callerPackage,
+                    callerVideoName = callerVideoName ?: it.callerVideoName,
+                    callerVideoFolder = callerVideoFolder ?: it.callerVideoFolder
                 )
             }
 
             val context = getApplication<Application>()
-            var fileName = "media"
+            var fileName = callerVideoName?.takeIf { it.isNotBlank() } ?: "media"
             var fileSize = 0L
 
             try {
@@ -199,7 +217,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     val nameIndex = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
                     val sizeIndex = cursor.getColumnIndex(OpenableColumns.SIZE)
                     if (cursor.moveToFirst()) {
-                        if (nameIndex != -1) fileName = cursor.getString(nameIndex) ?: "media"
+                        if (nameIndex != -1) fileName = cursor.getString(nameIndex) ?: fileName
                         if (sizeIndex != -1) fileSize = cursor.getLong(sizeIndex)
                     }
                 }
@@ -237,6 +255,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             }
 
             val defaultName = fileName.substringBeforeLast(".")
+            val effectiveActivity = customActivityName?.takeIf { it.isNotBlank() } ?: defaultName
             val metadata = VideoMetadata(
                 uri = uri,
                 fileName = fileName,
@@ -255,7 +274,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 it.copy(
                     selectedVideo = metadata,
                     customFileName = defaultName,
-                    activityName = defaultName,
+                    activityName = effectiveActivity,
                     activityTime = currentTimeStr,
                     segments = listOf(initialSegment),
                     activeSegmentIndex = 0,
@@ -270,6 +289,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 exoPlayer?.setMediaItem(mediaItem)
                 exoPlayer?.prepare()
             } catch (_: Exception) {}
+
+            if (autoStartPipeline) {
+                Toast.makeText(context, "已接收影片，自動拆出音軌並送往 Gemini 轉逐字稿...", Toast.LENGTH_SHORT).show()
+                startExtraction(autoTriggerTranscription = true)
+            }
         }
     }
 
@@ -474,7 +498,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     // Automated Gemini AI Transcription Execution
-    fun requestAiTranscription() {
+    fun requestAiTranscription(autoReturnToCaller: Boolean = false) {
         val state = _uiState.value
         val success = state.extractionState as? ExtractionState.Success ?: return
         if (state.isTranscribing) return
@@ -515,6 +539,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                             transcriptionError = null
                         )
                     }
+                    if (autoReturnToCaller && !_uiState.value.callerPackage.isNullOrBlank()) {
+                        returnTranscriptToCaller(getApplication(), transcript)
+                    }
                 },
                 onFailure = { error ->
                     _uiState.update {
@@ -523,8 +550,135 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                             transcriptionError = error.message ?: "轉譯失敗"
                         )
                     }
+                    // 若為跨 App 自動管線且 API 轉譯失敗，自動切換為免 API Gemini App 自動化管線
+                    if (autoReturnToCaller) {
+                        startFreeGeminiAppAutomation(getApplication())
+                    }
                 }
             )
+        }
+    }
+
+    /**
+     * 免 API 啟動 Gemini App 自動化轉逐字稿與自動點擊複製取回
+     */
+    fun startFreeGeminiAppAutomation(context: Context) {
+        val state = _uiState.value
+        val success = state.extractionState as? ExtractionState.Success ?: return
+        val audioFile = success.file
+        val mime = when (audioFile.name.substringAfterLast(".").lowercase()) {
+            "mp3" -> "audio/mpeg"
+            "wav" -> "audio/wav"
+            "flac" -> "audio/flac"
+            "m4a", "aac" -> "audio/mp4"
+            else -> "audio/*"
+        }
+
+        val effectiveName = state.activityName.ifBlank { audioFile.nameWithoutExtension }
+        val effectiveTime = state.activityTime.ifBlank {
+            SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefault()).format(Date())
+        }
+        val promptText = "請幫我將這段音訊轉成繁體中文逐字稿，並條列出重點摘要與發言重點：\n【活動時間】：$effectiveTime\n【活動名稱】：$effectiveName"
+
+        try {
+            val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as? android.content.ClipboardManager
+            clipboard?.setPrimaryClip(android.content.ClipData.newPlainText("GeminiPrompt", promptText))
+        } catch (_: Exception) {}
+
+        AudioRipAccessibilityService.startGeminiAutoTranscribeJob(
+            promptText = promptText,
+            callerPackage = state.callerPackage,
+            callerVideoName = state.callerVideoName,
+            callerVideoFolder = state.callerVideoFolder
+        ) { scraped ->
+            if (!scraped.isNullOrBlank()) {
+                _uiState.update {
+                    it.copy(
+                        isTranscribing = false,
+                        transcriptionText = scraped,
+                        transcriptionError = null
+                    )
+                }
+            }
+        }
+
+        val geminiPackage = "com.google.android.apps.bard"
+        val shareIntent = MediaStoreHelper.createShareWithPromptIntent(
+            context = context,
+            audioFile = audioFile,
+            mimeType = mime,
+            promptText = promptText,
+            targetPackage = geminiPackage
+        ).apply {
+            addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+        }
+
+        try {
+            context.startActivity(shareIntent)
+            Toast.makeText(context, "已送往 Gemini，生成完成後將自動複製並取回逐字稿！", Toast.LENGTH_SHORT).show()
+        } catch (_: Exception) {
+            val fallbackIntent = MediaStoreHelper.createShareWithPromptIntent(
+                context = context,
+                audioFile = audioFile,
+                mimeType = mime,
+                promptText = promptText
+            )
+            context.startActivity(android.content.Intent.createChooser(fallbackIntent, "選擇 Gemini 或其他 App").apply {
+                addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+            })
+        }
+    }
+
+    fun updateTranscriptionText(newText: String) {
+        _uiState.update { it.copy(transcriptionText = newText) }
+    }
+
+    fun onGeminiTranscriptRetrieved(
+        context: Context,
+        clipboardText: String?,
+        scrapedFallbackText: String?
+    ) {
+        val cleanClip = clipboardText?.trim()?.takeIf {
+            it.isNotBlank() && !it.startsWith("請幫我將這段音訊轉成繁體中文逐字稿")
+        }
+        val finalTranscript = cleanClip ?: scrapedFallbackText?.trim()?.takeIf { it.isNotBlank() } ?: return
+
+        _uiState.update {
+            it.copy(
+                isTranscribing = false,
+                transcriptionText = finalTranscript,
+                transcriptionError = null
+            )
+        }
+        Toast.makeText(context, "🎉 已自動從 Gemini 取回逐字稿！", Toast.LENGTH_SHORT).show()
+
+        if (!_uiState.value.callerPackage.isNullOrBlank()) {
+            returnTranscriptToCaller(context, finalTranscript)
+        }
+    }
+
+    fun returnTranscriptToCaller(context: Context, transcriptText: String? = _uiState.value.transcriptionText) {
+        val state = _uiState.value
+        val callerPkg = state.callerPackage?.takeIf { it.isNotBlank() } ?: return
+        val textToSend = transcriptText?.takeIf { it.isNotBlank() } ?: return
+
+        try {
+            val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as? android.content.ClipboardManager
+            clipboard?.setPrimaryClip(android.content.ClipData.newPlainText("Transcript", textToSend))
+        } catch (_: Exception) {}
+
+        try {
+            val returnIntent = android.content.Intent(AudioRipAccessibilityService.ACTION_RECEIVE_TRANSCRIPT).apply {
+                setPackage(callerPkg)
+                putExtra(AudioRipAccessibilityService.EXTRA_TRANSCRIPT_TEXT, textToSend)
+                putExtra(AudioRipAccessibilityService.EXTRA_READ_CLIPBOARD_TRANSCRIPT, true)
+                putExtra(AudioRipAccessibilityService.EXTRA_VIDEO_NAME, state.callerVideoName ?: "")
+                putExtra(AudioRipAccessibilityService.EXTRA_VIDEO_FOLDER, state.callerVideoFolder ?: "")
+                addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK or android.content.Intent.FLAG_ACTIVITY_SINGLE_TOP or android.content.Intent.FLAG_ACTIVITY_CLEAR_TOP)
+            }
+            context.startActivity(returnIntent)
+        } catch (e: Exception) {
+            Toast.makeText(context, "返回原 App 失敗: ${e.message}", Toast.LENGTH_SHORT).show()
         }
     }
 
@@ -630,7 +784,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    fun startExtraction() {
+    fun startExtraction(autoTriggerTranscription: Boolean = false) {
         val state = _uiState.value
         val video = state.selectedVideo ?: return
         val format = state.selectedFormat
@@ -690,6 +844,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                         ))
                     }
                     loadAudioIntoPlayer(firstFile)
+                    if (autoTriggerTranscription) {
+                        triggerAutoTranscriptionPipeline(context)
+                    }
                 } else {
                     _uiState.update { it.copy(extractionState = ExtractionState.Error("多段導出失敗")) }
                 }
@@ -768,10 +925,18 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                                     it.copy(extractionState = ExtractionState.Success(extractedFile, mediaUri))
                                 }
                                 loadAudioIntoPlayer(extractedFile)
+                                if (autoTriggerTranscription) {
+                                    triggerAutoTranscriptionPipeline(context)
+                                }
                             },
                             onFailure = { error ->
+                                // 即使 MediaStore 儲存失敗，本地快取檔案仍可直接送往 Gemini 轉逐字稿
                                 _uiState.update {
-                                    it.copy(extractionState = ExtractionState.Error("儲存至音樂目錄失敗: ${error.message}"))
+                                    it.copy(extractionState = ExtractionState.Success(extractedFile, Uri.fromFile(extractedFile)))
+                                }
+                                loadAudioIntoPlayer(extractedFile)
+                                if (autoTriggerTranscription) {
+                                    triggerAutoTranscriptionPipeline(context)
                                 }
                             }
                         )
@@ -783,6 +948,15 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     }
                 )
             }
+        }
+    }
+
+    private fun triggerAutoTranscriptionPipeline(context: Context) {
+        val currentKey = _uiState.value.geminiApiKey
+        if (currentKey.isNotBlank()) {
+            requestAiTranscription(autoReturnToCaller = true)
+        } else {
+            startFreeGeminiAppAutomation(context)
         }
     }
 

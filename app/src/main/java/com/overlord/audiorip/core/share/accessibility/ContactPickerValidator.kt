@@ -180,4 +180,88 @@ object ContactPickerValidator {
 
         return true
     }
+
+    // ══════════════════════════════════════════════════════════════════════════
+    // Gemini App (com.google.android.apps.bard) 自動化節點辨識輔助方法
+    // ══════════════════════════════════════════════════════════════════════════
+
+    private val GEMINI_SEND_KEYWORDS = setOf(
+        "傳送", "發送", "送出", "提交", "send", "submit", "send message", "傳送訊息"
+    )
+
+    private val GEMINI_STOP_KEYWORDS = setOf(
+        "停止", "停止生成", "停止回應", "stop", "stop generating", "stop response"
+    )
+
+    private val GEMINI_COPY_KEYWORDS = setOf(
+        "複製", "複製文字", "複製回應", "複製內容", "copy", "copy text", "copy response"
+    )
+
+    /**
+     * 判定是否為 Gemini App 的「傳送 / Send」按鈕
+     */
+    fun isGeminiSendButton(text: String?, contentDesc: String?, viewId: String? = null): Boolean {
+        val txt = text?.trim()?.lowercase() ?: ""
+        val desc = contentDesc?.trim()?.lowercase() ?: ""
+        val id = viewId?.trim()?.lowercase() ?: ""
+
+        if (GEMINI_SEND_KEYWORDS.any { txt == it || desc == it }) return true
+        if (desc.contains("傳送") || desc.contains("發送") || desc.contains("send")) {
+            if (!desc.contains("停止") && !desc.contains("stop")) return true
+        }
+        if (id.contains("send") && !id.contains("stop")) return true
+        return false
+    }
+
+    /**
+     * 判定是否為 Gemini App 正在生成中的「停止 / Stop」按鈕或狀態
+     */
+    fun isGeminiStopGeneratingButton(text: String?, contentDesc: String?, viewId: String? = null): Boolean {
+        val txt = text?.trim()?.lowercase() ?: ""
+        val desc = contentDesc?.trim()?.lowercase() ?: ""
+        val id = viewId?.trim()?.lowercase() ?: ""
+
+        if (GEMINI_STOP_KEYWORDS.any { txt == it || desc == it }) return true
+        if (desc.contains("停止生成") || desc.contains("停止回應") || desc.contains("stop generating")) return true
+        if (id.contains("stop")) return true
+        return false
+    }
+
+    /**
+     * 判定是否為 Gemini App 回答底部的「複製 / Copy」按鈕
+     */
+    fun isGeminiCopyButton(text: String?, contentDesc: String?, viewId: String? = null): Boolean {
+        val txt = text?.trim()?.lowercase() ?: ""
+        val desc = contentDesc?.trim()?.lowercase() ?: ""
+        val id = viewId?.trim()?.lowercase() ?: ""
+
+        if (GEMINI_COPY_KEYWORDS.any { txt == it || desc == it }) return true
+        if ((desc.contains("複製") || desc.contains("copy")) &&
+            !desc.contains("連結") && !desc.contains("link")
+        ) {
+            return true
+        }
+        if (id.contains("copy") && !id.contains("link")) return true
+        return false
+    }
+
+    /**
+     * 從 Gemini 畫面所有文字節點中，過濾掉使用者發送的提示詞與系統短標籤，萃取出最完整的逐字稿回覆文字
+     */
+    fun extractBestGeminiTranscriptFromTexts(texts: List<String>, promptText: String): String? {
+        val cleanPrompt = promptText.trim()
+        val promptPrefix = cleanPrompt.take(24)
+
+        val candidates = texts.map { it.trim() }.filter { cand ->
+            if (cand.length < 25) return@filter false
+            if (cleanPrompt.isNotEmpty() && (cand == cleanPrompt || (promptPrefix.isNotEmpty() && cand.startsWith(promptPrefix)))) {
+                return@filter false
+            }
+            if (cand.startsWith("請幫我將這段音訊轉成繁體中文逐字稿")) return@filter false
+            true
+        }
+
+        if (candidates.isEmpty()) return null
+        return candidates.maxByOrNull { it.length }
+    }
 }

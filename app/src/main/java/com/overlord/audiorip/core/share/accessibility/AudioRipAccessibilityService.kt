@@ -36,12 +36,27 @@ class AudioRipAccessibilityService : AccessibilityService() {
         VERIFY_TRANSMISSION_AND_RETURN
     }
 
+    enum class GeminiAutoStep {
+        IDLE,
+        FILL_PROMPT_AND_SEND,
+        WAIT_GENERATION_AND_COPY,
+        RETURN_WITH_RESULT
+    }
+
     companion object {
         private const val TAG = "AudioRipAccessibility"
         private const val LINE_PKG = "jp.naver.line.android"
+        private const val GEMINI_PKG = "com.google.android.apps.bard"
         private const val JOB_TIMEOUT_MS = 45_000L
+        private const val GEMINI_TIMEOUT_MS = 120_000L
         private const val RETURN_DELAY_TEXT_MS = 600L
-        private const val TICK_INTERVAL_MS = 200L
+        private const val TICK_INTERVAL_MS = 250L
+
+        const val ACTION_RECEIVE_TRANSCRIPT = "com.overlord.omnicam.ACTION_RECEIVE_TRANSCRIPT"
+        const val EXTRA_TRANSCRIPT_TEXT = "EXTRA_TRANSCRIPT_TEXT"
+        const val EXTRA_READ_CLIPBOARD_TRANSCRIPT = "EXTRA_READ_CLIPBOARD_TRANSCRIPT"
+        const val EXTRA_VIDEO_NAME = "EXTRA_VIDEO_NAME"
+        const val EXTRA_VIDEO_FOLDER = "EXTRA_VIDEO_FOLDER"
 
         @Volatile
         var isServiceConnected: Boolean = false
@@ -62,6 +77,34 @@ class AudioRipAccessibilityService : AccessibilityService() {
         @Volatile
         var currentStep: AutoShareStep = AutoShareStep.IDLE
             private set
+
+        // --- Gemini 免 API 全自動生成與取回逐字稿狀態 ---
+        @Volatile
+        var isGeminiAutoActive: Boolean = false
+            private set
+
+        @Volatile
+        var geminiStep: GeminiAutoStep = GeminiAutoStep.IDLE
+            private set
+
+        @Volatile
+        var pendingClipboardTranscriptRead: Boolean = false
+
+        @Volatile
+        var lastScrapedGeminiTranscript: String? = null
+
+        private var geminiPromptText: String = ""
+        private var geminiCallerPackage: String? = null
+        private var geminiCallerVideoName: String? = null
+        private var geminiCallerVideoFolder: String? = null
+        private var geminiJobStartTimeMs: Long = 0L
+        private var geminiStepChangedTimeMs: Long = 0L
+        private var hasFilledGeminiPrompt: Boolean = false
+        private var hasClickedGeminiSend: Boolean = false
+        private var hasClickedGeminiCopy: Boolean = false
+        private var lastGeminiActionTimeMs: Long = 0L
+        private var lastCandidateTextChangeMs: Long = 0L
+        private var onGeminiResultCallback: ((String?) -> Unit)? = null
 
         private var jobStartTimeMs: Long = 0L
         private var stepChangedTimeMs: Long = 0L
@@ -86,6 +129,7 @@ class AudioRipAccessibilityService : AccessibilityService() {
 
         fun startContactPickerMode(onPicked: (String) -> Unit) {
             cancelAutoShareJob()
+            cancelGeminiAutoJob()
             isContactPickerMode = true
             onContactPickedCallback = onPicked
             contactPickerStartTimeMs = System.currentTimeMillis()
@@ -97,6 +141,51 @@ class AudioRipAccessibilityService : AccessibilityService() {
             isContactPickerMode = false
             onContactPickedCallback = null
             activeServiceInstance?.stopContactPickerTicker()
+        }
+
+        /**
+         * 啟動 Gemini App 免 API 全自動生成逐字稿並自動點擊複製取回任務
+         */
+        fun startGeminiAutoTranscribeJob(
+            promptText: String,
+            callerPackage: String? = null,
+            callerVideoName: String? = null,
+            callerVideoFolder: String? = null,
+            onResult: ((String?) -> Unit)? = null
+        ) {
+            cancelAutoShareJob()
+            cancelContactPickerMode()
+
+            val now = System.currentTimeMillis()
+            geminiPromptText = promptText
+            geminiCallerPackage = callerPackage
+            geminiCallerVideoName = callerVideoName
+            geminiCallerVideoFolder = callerVideoFolder
+            geminiJobStartTimeMs = now
+            geminiStepChangedTimeMs = now
+            hasFilledGeminiPrompt = false
+            hasClickedGeminiSend = false
+            hasClickedGeminiCopy = false
+            lastGeminiActionTimeMs = 0L
+            lastCandidateTextChangeMs = now
+            lastScrapedGeminiTranscript = null
+            pendingClipboardTranscriptRead = false
+            onGeminiResultCallback = onResult
+
+            geminiStep = GeminiAutoStep.FILL_PROMPT_AND_SEND
+            isGeminiAutoActive = true
+
+            Log.i(TAG, "啟動 Gemini 免 API 全自動逐字稿任務 (caller=$callerPackage, video=$callerVideoName)")
+            activeServiceInstance?.scheduleTicker()
+        }
+
+        fun cancelGeminiAutoJob() {
+            isGeminiAutoActive = false
+            geminiStep = GeminiAutoStep.IDLE
+            onGeminiResultCallback = null
+            hasFilledGeminiPrompt = false
+            hasClickedGeminiSend = false
+            hasClickedGeminiCopy = false
         }
 
         /**
@@ -180,9 +269,14 @@ class AudioRipAccessibilityService : AccessibilityService() {
 
     private val tickerRunnable = object : Runnable {
         override fun run() {
-            if (!isAutomatedSendingActive) return
-            processCurrentWindow()
+            if (!isAutomatedSendingActive && !isGeminiAutoActive) return
             if (isAutomatedSendingActive) {
+                processCurrentWindow()
+            }
+            if (isGeminiAutoActive) {
+                processGeminiWindow()
+            }
+            if (isAutomatedSendingActive || isGeminiAutoActive) {
                 mainHandler.postDelayed(this, TICK_INTERVAL_MS)
             }
         }
@@ -244,15 +338,21 @@ class AudioRipAccessibilityService : AccessibilityService() {
             return
         }
 
-        // 自動傳送狀態機
+        // LINE 自動傳送狀態機
         if (isAutomatedSendingActive) {
             processCurrentWindow()
+        }
+
+        // Gemini 免 API 全自動生成並複製取回狀態機
+        if (isGeminiAutoActive) {
+            processGeminiWindow()
         }
     }
 
     override fun onInterrupt() {
         Log.w(TAG, "無障礙服務被打斷")
         cancelAutoShareJob()
+        cancelGeminiAutoJob()
         cancelContactPickerMode()
     }
 
@@ -440,6 +540,242 @@ class AudioRipAccessibilityService : AccessibilityService() {
         } catch (_: Exception) {
             performGlobalAction(GLOBAL_ACTION_BACK)
         }
+    }
+
+    // ══════════════════════════════════════════════════════════════════════════
+    // Gemini App (com.google.android.apps.bard) 全自動生成與取回逐字稿狀態機
+    // ══════════════════════════════════════════════════════════════════════════
+
+    private fun processGeminiWindow() {
+        if (!isGeminiAutoActive) return
+
+        val now = System.currentTimeMillis()
+        if (now - geminiJobStartTimeMs > GEMINI_TIMEOUT_MS) {
+            Log.w(TAG, "Gemini 自動逐字稿任務超時，自動返回 App")
+            finishGeminiJobAndReturn(lastScrapedGeminiTranscript)
+            return
+        }
+
+        val rootNode = rootInActiveWindow ?: return
+        try {
+            val pkg = rootNode.packageName?.toString() ?: ""
+
+            // 若跳出系統分享選單 (Chooser)，自動點擊 Gemini
+            if (pkg != GEMINI_PKG && geminiStep == GeminiAutoStep.FILL_PROMPT_AND_SEND) {
+                if (now - lastChooserClickTimeMs > 800L) {
+                    val geminiNode = findNodeByTextOrDesc(rootNode, "Gemini")
+                    if (geminiNode != null) {
+                        Log.i(TAG, "於系統分享選單中找到 Gemini，自動點擊")
+                        clickNodeOrParent(geminiNode)
+                        lastChooserClickTimeMs = now
+                        return
+                    }
+                }
+            }
+
+            if (pkg != GEMINI_PKG) return
+
+            when (geminiStep) {
+                GeminiAutoStep.FILL_PROMPT_AND_SEND -> handleGeminiFillAndSend(rootNode, now)
+                GeminiAutoStep.WAIT_GENERATION_AND_COPY -> handleGeminiWaitAndCopy(rootNode, now)
+                GeminiAutoStep.RETURN_WITH_RESULT -> {
+                    if (now - geminiStepChangedTimeMs >= 450L) {
+                        finishGeminiJobAndReturn(lastScrapedGeminiTranscript)
+                    }
+                }
+                GeminiAutoStep.IDLE -> {}
+            }
+        } finally {
+            try { rootNode.recycle() } catch (_: Exception) {}
+        }
+    }
+
+    private fun handleGeminiFillAndSend(rootNode: AccessibilityNodeInfo, now: Long) {
+        if (now - lastGeminiActionTimeMs < 350L) return
+
+        // 1. 檢查並填入提示詞
+        if (!hasFilledGeminiPrompt && geminiPromptText.isNotBlank()) {
+            val inputField = findGeminiPromptInputField(rootNode)
+            if (inputField != null) {
+                val existingText = inputField.text?.toString()?.trim() ?: ""
+                if (!existingText.contains("逐字稿")) {
+                    Log.i(TAG, "找到 Gemini 輸入框，自動填入逐字稿提示詞")
+                    val args = Bundle().apply {
+                        putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, geminiPromptText)
+                    }
+                    val setOk = inputField.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args)
+                    if (!setOk) {
+                        inputField.performAction(AccessibilityNodeInfo.ACTION_FOCUS)
+                        inputField.performAction(AccessibilityNodeInfo.ACTION_PASTE)
+                    }
+                }
+                hasFilledGeminiPrompt = true
+                lastGeminiActionTimeMs = now
+                return
+            }
+        }
+
+        // 2. 點擊「傳送 / Send」按鈕
+        if (!hasClickedGeminiSend && (hasFilledGeminiPrompt || now - geminiStepChangedTimeMs > 1800L)) {
+            val sendBtn = findGeminiSendButton(rootNode)
+            if (sendBtn != null) {
+                Log.i(TAG, "找到 Gemini 傳送按鈕，自動點擊送出音訊與指令")
+                clickNodeOrParent(sendBtn)
+                hasClickedGeminiSend = true
+                geminiStep = GeminiAutoStep.WAIT_GENERATION_AND_COPY
+                geminiStepChangedTimeMs = now
+                lastGeminiActionTimeMs = now
+                lastCandidateTextChangeMs = now
+            }
+        }
+    }
+
+    private fun handleGeminiWaitAndCopy(rootNode: AccessibilityNodeInfo, now: Long) {
+        // 先等待至少 3.2 秒讓 Gemini 開始處理音訊並進入生成狀態
+        if (now - geminiStepChangedTimeMs < 3200L) return
+
+        val isStoppingPresent = hasGeminiStopGeneratingNode(rootNode)
+        val allTexts = mutableListOf<String>()
+        collectNodeTexts(rootNode, allTexts)
+        val bestCandidate = ContactPickerValidator.extractBestGeminiTranscriptFromTexts(allTexts, geminiPromptText)
+        if (!bestCandidate.isNullOrBlank()) {
+            if (bestCandidate != lastScrapedGeminiTranscript) {
+                lastScrapedGeminiTranscript = bestCandidate
+                lastCandidateTextChangeMs = now
+            }
+        }
+
+        if (isStoppingPresent) {
+            // Gemini 仍在生成中，持續等待
+            return
+        }
+
+        // 尋找回答下方的「複製 / Copy」按鈕
+        val copyBtn = findGeminiCopyButton(rootNode)
+        if (copyBtn != null && !hasClickedGeminiCopy && now - geminiStepChangedTimeMs >= 4000L) {
+            // 確認文字已穩定至少 1.2 秒再按複製
+            if (now - lastCandidateTextChangeMs >= 1200L) {
+                Log.i(TAG, "偵測到 Gemini 生成完畢且出現【複製】按鈕，自動點擊複製完整逐字稿！")
+                clickNodeOrParent(copyBtn)
+                hasClickedGeminiCopy = true
+                pendingClipboardTranscriptRead = true
+                geminiStep = GeminiAutoStep.RETURN_WITH_RESULT
+                geminiStepChangedTimeMs = now
+                lastGeminiActionTimeMs = now
+                return
+            }
+        }
+
+        // 備援機制：若畫面已產出超過 40 字的逐字稿且連續 3.5 秒無變化、亦無停止按鈕，直接取回
+        val currentScraped = lastScrapedGeminiTranscript
+        if (!currentScraped.isNullOrBlank() && currentScraped.length >= 40 &&
+            now - lastCandidateTextChangeMs >= 3500L && now - geminiStepChangedTimeMs >= 6500L
+        ) {
+            Log.i(TAG, "Gemini 回覆文字已穩定 (${currentScraped.length} 字)，自動取回逐字稿並返回")
+            pendingClipboardTranscriptRead = true
+            geminiStep = GeminiAutoStep.RETURN_WITH_RESULT
+            geminiStepChangedTimeMs = now
+        }
+    }
+
+    private fun finishGeminiJobAndReturn(scrapedText: String?) {
+        val cb = onGeminiResultCallback
+        val callerPkg = geminiCallerPackage
+        val videoName = geminiCallerVideoName
+        val videoFolder = geminiCallerVideoFolder
+        cancelGeminiAutoJob()
+        pendingClipboardTranscriptRead = true
+        cb?.invoke(scrapedText)
+
+        if (!callerPkg.isNullOrBlank()) {
+            try {
+                val returnIntent = Intent(ACTION_RECEIVE_TRANSCRIPT).apply {
+                    setPackage(callerPkg)
+                    putExtra(EXTRA_TRANSCRIPT_TEXT, scrapedText ?: "")
+                    putExtra(EXTRA_READ_CLIPBOARD_TRANSCRIPT, true)
+                    putExtra(EXTRA_VIDEO_NAME, videoName ?: "")
+                    putExtra(EXTRA_VIDEO_FOLDER, videoFolder ?: "")
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP)
+                }
+                startActivity(returnIntent)
+                Log.i(TAG, "已自動將逐字稿結果導回呼叫端 App: $callerPkg")
+                return
+            } catch (e: Exception) {
+                Log.w(TAG, "直接導回呼叫端 $callerPkg 失敗，改由 AudioRip 中轉: ${e.message}")
+            }
+        }
+        returnToAudioRip()
+    }
+
+    private fun findGeminiPromptInputField(root: AccessibilityNodeInfo): AccessibilityNodeInfo? {
+        val queue = ArrayDeque<AccessibilityNodeInfo>()
+        queue.add(root)
+        while (queue.isNotEmpty()) {
+            val node = queue.removeFirst()
+            val cls = node.className?.toString() ?: ""
+            if (node.isEditable || cls.contains("EditText", ignoreCase = true)) {
+                return node
+            }
+            for (i in 0 until node.childCount) {
+                node.getChild(i)?.let { queue.add(it) }
+            }
+        }
+        return null
+    }
+
+    private fun findGeminiSendButton(root: AccessibilityNodeInfo): AccessibilityNodeInfo? {
+        val queue = ArrayDeque<AccessibilityNodeInfo>()
+        queue.add(root)
+        while (queue.isNotEmpty()) {
+            val node = queue.removeFirst()
+            val text = node.text?.toString()
+            val desc = node.contentDescription?.toString()
+            val viewId = node.viewIdResourceName
+            if (ContactPickerValidator.isGeminiSendButton(text, desc, viewId) && node.isEnabled) {
+                return node
+            }
+            for (i in 0 until node.childCount) {
+                node.getChild(i)?.let { queue.add(it) }
+            }
+        }
+        return null
+    }
+
+    private fun hasGeminiStopGeneratingNode(root: AccessibilityNodeInfo): Boolean {
+        val queue = ArrayDeque<AccessibilityNodeInfo>()
+        queue.add(root)
+        while (queue.isNotEmpty()) {
+            val node = queue.removeFirst()
+            val text = node.text?.toString()
+            val desc = node.contentDescription?.toString()
+            val viewId = node.viewIdResourceName
+            if (ContactPickerValidator.isGeminiStopGeneratingButton(text, desc, viewId)) {
+                return true
+            }
+            for (i in 0 until node.childCount) {
+                node.getChild(i)?.let { queue.add(it) }
+            }
+        }
+        return false
+    }
+
+    private fun findGeminiCopyButton(root: AccessibilityNodeInfo): AccessibilityNodeInfo? {
+        val queue = ArrayDeque<AccessibilityNodeInfo>()
+        queue.add(root)
+        var lastMatch: AccessibilityNodeInfo? = null
+        while (queue.isNotEmpty()) {
+            val node = queue.removeFirst()
+            val text = node.text?.toString()
+            val desc = node.contentDescription?.toString()
+            val viewId = node.viewIdResourceName
+            if (ContactPickerValidator.isGeminiCopyButton(text, desc, viewId)) {
+                lastMatch = node
+            }
+            for (i in 0 until node.childCount) {
+                node.getChild(i)?.let { queue.add(it) }
+            }
+        }
+        return lastMatch
     }
 
     // --- 輔助比對節點方法 ---
