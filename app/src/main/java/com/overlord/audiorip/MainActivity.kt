@@ -99,12 +99,18 @@ class MainActivity : ComponentActivity() {
                 intent.getParcelableExtra(Intent.EXTRA_STREAM)
             }
             if (mediaUri != null) {
-                val autoTranscribe = intent.getBooleanExtra("EXTRA_AUTO_TRANSCRIBE_PIPELINE", false)
+                val autoTranscribe = intent.getBooleanExtra("EXTRA_AUTO_TRANSCRIBE_PIPELINE", false) ||
+                    intent.getBooleanExtra("extra_auto_transcribe_pipeline", false)
                 val callerPkg = intent.getStringExtra("EXTRA_CALLER_PACKAGE")
+                    ?: intent.getStringExtra("extra_caller_package")
                 val videoName = intent.getStringExtra("EXTRA_VIDEO_NAME")
+                    ?: intent.getStringExtra("extra_video_name")
                 val videoFolder = intent.getStringExtra("EXTRA_VIDEO_FOLDER")
+                    ?: intent.getStringExtra("extra_video_folder")
                 val activityName = intent.getStringExtra("EXTRA_ACTIVITY_NAME")
+                    ?: intent.getStringExtra("extra_activity_name")
                 val lockedContact = intent.getStringExtra("EXTRA_LOCKED_LINE_CONTACT")
+                    ?: intent.getStringExtra("extra_locked_line_contact")
 
                 viewModel.loadMedia(
                     uri = mediaUri,
