@@ -109,4 +109,26 @@ class ContactPickerValidatorTest {
         assertTrue(ContactPickerValidator.isGeminiPromptAlreadyFilled(customPrompt, customPrompt))
         assertFalse(ContactPickerValidator.isGeminiPromptAlreadyFilled("向 Gemini 提問", customPrompt))
     }
+
+    @Test
+    fun testGeminiBlacklistAndSendButtonEnhancements() {
+        val accountText = "目前的登入身分是霸王色工作室\noverlordstudio2026@gmail.com\n帳戶和設定。"
+        assertTrue(ContactPickerValidator.isBlacklistedGeminiSystemText(accountText))
+        assertFalse(ContactPickerValidator.isValidTranscriptResult(accountText))
+
+        val prompt = "請幫我將這段音訊轉成繁體中文逐字稿"
+        val extracted = ContactPickerValidator.extractBestGeminiTranscriptFromTexts(
+            listOf("Gemini", prompt, accountText, "複製"),
+            prompt
+        )
+        // 帳號資訊必須被黑名單過濾掉，不得作為逐字稿取回
+        org.junit.Assert.assertNull(extracted)
+
+        // 送出按鈕多重關鍵字驗證
+        assertTrue(ContactPickerValidator.isGeminiSendButton(null, "傳送提示", null))
+        assertTrue(ContactPickerValidator.isGeminiSendButton(null, "發送提示", null))
+        assertTrue(ContactPickerValidator.isGeminiSendButton(null, "Send prompt", null))
+        assertTrue(ContactPickerValidator.isGeminiSendButton(null, "向上箭頭", null))
+        assertTrue(ContactPickerValidator.isGeminiSendButton(null, null, "com.google.android.apps.bard:id/send_button"))
+    }
 }

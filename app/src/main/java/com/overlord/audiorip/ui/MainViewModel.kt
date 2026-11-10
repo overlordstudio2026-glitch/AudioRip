@@ -668,13 +668,25 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         clipboardText: String?,
         scrapedFallbackText: String?
     ) {
-        val currentTplPrefix = _uiState.value.promptTemplate.trim().lineSequence().firstOrNull()?.trim()?.take(12) ?: ""
-        val cleanClip = clipboardText?.trim()?.takeIf {
-            it.isNotBlank() &&
-                !it.startsWith("請幫我將這段音訊") &&
-                (currentTplPrefix.length < 4 || !it.startsWith(currentTplPrefix))
+        val tpl = _uiState.value.promptTemplate
+        val validClip = clipboardText?.trim()?.takeIf {
+            ContactPickerValidator.isValidTranscriptResult(it, tpl)
         }
-        val finalTranscript = cleanClip ?: scrapedFallbackText?.trim()?.takeIf { it.isNotBlank() } ?: return
+        val validScraped = scrapedFallbackText?.trim()?.takeIf {
+            ContactPickerValidator.isValidTranscriptResult(it, tpl)
+        }
+        val finalTranscript = validClip ?: validScraped
+
+        if (finalTranscript.isNullOrBlank()) {
+            _uiState.update {
+                it.copy(
+                    isTranscribing = false,
+                    transcriptionError = "未能從 Gemini 擷取有效逐字稿（請確認是否成功生成）"
+                )
+            }
+            Toast.makeText(context, "⚠️ 逐字稿取回失敗或包含無效系統資訊", Toast.LENGTH_LONG).show()
+            return
+        }
 
         _uiState.update {
             it.copy(

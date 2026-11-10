@@ -207,7 +207,8 @@ object ContactPickerValidator {
     )
 
     private val GEMINI_SEND_KEYWORDS = setOf(
-        "傳送", "發送", "送出", "提交", "send", "submit", "send message", "傳送訊息", "傳送提示", "send prompt"
+        "傳送", "發送", "送出", "提交", "send", "submit", "send message", "傳送訊息",
+        "傳送提示", "send prompt", "發送提示", "傳送查詢", "submit query", "向上箭頭", "arrow up", "send button", "傳送按鈕"
     )
 
     private val GEMINI_STOP_KEYWORDS = setOf(
@@ -217,6 +218,57 @@ object ContactPickerValidator {
     private val GEMINI_COPY_KEYWORDS = setOf(
         "複製", "複製文字", "複製回應", "複製內容", "copy", "copy text", "copy response"
     )
+
+    val GEMINI_IGNORED_SYSTEM_PATTERNS = listOf(
+        "登入身分",
+        "目前的登入身分",
+        "帳戶和設定",
+        "帳戶與設定",
+        "帳號和設定",
+        "帳號與設定",
+        "google 帳戶",
+        "google 帳號",
+        "google account",
+        "@gmail.com",
+        "個人檔案",
+        "切換帳戶",
+        "新增帳戶",
+        "管理您的 google",
+        "隱私權政策",
+        "服務條款",
+        "terms of service",
+        "privacy policy",
+        "gemini 可能會提供不準確",
+        "gemini may display inaccurate"
+    )
+
+    /**
+     * 判定是否為 Google / Gemini 帳戶個人資料或系統聲明等應予排除的黑名單文字
+     */
+    fun isBlacklistedGeminiSystemText(text: String?): Boolean {
+        if (text.isNullOrBlank()) return true
+        val lower = text.trim().lowercase()
+        return GEMINI_IGNORED_SYSTEM_PATTERNS.any { pattern ->
+            lower.contains(pattern.lowercase())
+        }
+    }
+
+    /**
+     * 驗證取得的文字是否為合法的逐字稿回覆（非空、非系統黑名單、長度足夠且不為提示詞本身）
+     */
+    fun isValidTranscriptResult(text: String?, promptText: String = ""): Boolean {
+        if (text.isNullOrBlank()) return false
+        val clean = text.trim()
+        if (clean.length < 25) return false
+        if (isBlacklistedGeminiSystemText(clean)) return false
+        if (promptText.isNotBlank()) {
+            val cleanPrompt = promptText.trim()
+            if (clean == cleanPrompt) return false
+            val prefix = cleanPrompt.lineSequence().firstOrNull()?.trim()?.take(16) ?: cleanPrompt.take(24)
+            if (prefix.length >= 6 && clean.startsWith(prefix)) return false
+        }
+        return true
+    }
 
     /**
      * 判定當前視窗套件是否為 Gemini App 或承載 Gemini 對話視窗的 Google App
@@ -290,10 +342,14 @@ object ContactPickerValidator {
 
         if (isGeminiStopGeneratingButton(text, contentDesc, viewId)) return false
         if (GEMINI_SEND_KEYWORDS.any { txt == it || desc == it }) return true
-        if (desc.contains("傳送") || desc.contains("發送") || desc.contains("送出") || desc.contains("send") || desc.contains("submit")) {
+        if (desc.contains("傳送") || desc.contains("發送") || desc.contains("送出") ||
+            desc.contains("send") || desc.contains("submit") || desc.contains("arrow") || desc.contains("箭頭")
+        ) {
             if (!desc.contains("停止") && !desc.contains("stop") && !desc.contains("傳送對象")) return true
         }
-        if ((id.contains("send") || id.contains("submit")) && !id.contains("stop")) return true
+        if ((id.contains("send") || id.contains("submit") || id.contains("action_button")) &&
+            !id.contains("stop") && !id.contains("voice") && !id.contains("mic")
+        ) return true
         return false
     }
 
@@ -330,7 +386,7 @@ object ContactPickerValidator {
     }
 
     /**
-     * 從 Gemini 畫面所有文字節點中，過濾掉使用者發送的提示詞與系統短標籤，萃取出最完整的逐字稿回覆文字
+     * 從 Gemini 畫面所有文字節點中，過濾掉使用者發送的提示詞、系統黑名單與系統短標籤，萃取出最完整的逐字稿回覆文字
      */
     fun extractBestGeminiTranscriptFromTexts(texts: List<String>, promptText: String): String? {
         val cleanPrompt = promptText.trim()
@@ -338,6 +394,7 @@ object ContactPickerValidator {
 
         val candidates = texts.map { it.trim() }.filter { cand ->
             if (cand.length < 25) return@filter false
+            if (isBlacklistedGeminiSystemText(cand)) return@filter false
             if (cleanPrompt.isNotEmpty() && (cand == cleanPrompt || (promptPrefix.length >= 6 && cand.startsWith(promptPrefix)))) {
                 return@filter false
             }

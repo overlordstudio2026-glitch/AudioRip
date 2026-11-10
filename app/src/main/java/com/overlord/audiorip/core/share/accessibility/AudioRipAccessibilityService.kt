@@ -103,6 +103,9 @@ class AudioRipAccessibilityService : AccessibilityService() {
         private var geminiPromptFillAttempts: Int = 0
         private var hasClickedGeminiSend: Boolean = false
         private var hasClickedGeminiCopy: Boolean = false
+        private var hasSeenStopGenerating: Boolean = false
+        private var sendAttemptCount: Int = 0
+        private var sendAttemptTimeMs: Long = 0L
         private var lastGeminiActionTimeMs: Long = 0L
         private var lastCandidateTextChangeMs: Long = 0L
         private var onGeminiResultCallback: ((String?) -> Unit)? = null
@@ -168,6 +171,9 @@ class AudioRipAccessibilityService : AccessibilityService() {
             geminiPromptFillAttempts = 0
             hasClickedGeminiSend = false
             hasClickedGeminiCopy = false
+            hasSeenStopGenerating = false
+            sendAttemptCount = 0
+            sendAttemptTimeMs = 0L
             lastGeminiActionTimeMs = 0L
             lastCandidateTextChangeMs = now
             lastScrapedGeminiTranscript = null
@@ -189,6 +195,9 @@ class AudioRipAccessibilityService : AccessibilityService() {
             geminiPromptFillAttempts = 0
             hasClickedGeminiSend = false
             hasClickedGeminiCopy = false
+            hasSeenStopGenerating = false
+            sendAttemptCount = 0
+            sendAttemptTimeMs = 0L
         }
 
         /**
@@ -614,15 +623,16 @@ class AudioRipAccessibilityService : AccessibilityService() {
     }
 
     private fun handleGeminiFillAndSend(rootNode: AccessibilityNodeInfo, now: Long) {
-        if (now - lastGeminiActionTimeMs < 380L) return
+        if (now - lastGeminiActionTimeMs < 350L) return
+
+        val inputField = findGeminiPromptInputField(rootNode)
+        val currentInputText = inputField?.text?.toString()?.trim() ?: ""
 
         // 1. 檢查並填入提示詞至 Gemini 底部輸入框
         if (!hasFilledGeminiPrompt && geminiPromptText.isNotBlank()) {
-            val inputField = findGeminiPromptInputField(rootNode)
             if (inputField != null) {
-                val existingText = inputField.text?.toString()?.trim() ?: ""
-                if (ContactPickerValidator.isGeminiPromptAlreadyFilled(existingText, geminiPromptText)) {
-                    Log.i(TAG, "已確認 Gemini 輸入框內含目標提示詞，準備點擊送出")
+                if (ContactPickerValidator.isGeminiPromptAlreadyFilled(currentInputText, geminiPromptText)) {
+                    Log.i(TAG, "已確認 Gemini 輸入框內含目標提示詞，準備進行送出")
                     hasFilledGeminiPrompt = true
                 } else {
                     Log.i(TAG, "找到 Gemini 輸入框 (嘗試 #${geminiPromptFillAttempts + 1})，自動聚焦並填入逐字稿提示詞")
@@ -639,15 +649,12 @@ class AudioRipAccessibilityService : AccessibilityService() {
 
                     geminiPromptFillAttempts++
                     lastGeminiActionTimeMs = now
-
-                    // 若已連續執行填入 2 次以上，標記為已填入以推進至點擊傳送
                     if (geminiPromptFillAttempts >= 2) {
                         hasFilledGeminiPrompt = true
                     }
                     return
                 }
             } else {
-                // 若輸入框處於收合/未聚焦佔位狀態，先點擊「向 Gemini 提問 / Ask Gemini」展開輸入框
                 val placeholderNode = findGeminiPromptPlaceholderNode(rootNode)
                 if (placeholderNode != null) {
                     Log.i(TAG, "找到 Gemini 提示詞佔位區，點擊展開輸入框")
@@ -659,14 +666,39 @@ class AudioRipAccessibilityService : AccessibilityService() {
             }
         }
 
-        // 2. 確認提示詞已填入（或超時保底）後，等待傳送按鈕啟用並自動點擊「傳送 / Send」
-        val canProceedToSend = hasFilledGeminiPrompt || geminiPromptText.isBlank() || (now - geminiStepChangedTimeMs > 5000L)
-        if (!hasClickedGeminiSend && canProceedToSend && (now - lastGeminiActionTimeMs >= 420L)) {
-            val sendBtn = findGeminiSendButton(rootNode)
-            if (sendBtn != null) {
-                Log.i(TAG, "找到 Gemini 傳送按鈕，自動點擊送出音訊與逐字稿指令")
-                clickNodeOrParent(sendBtn)
+        // 2. 執行送出與握手驗證 (Handshake Verification)
+        val isPromptFilled = hasFilledGeminiPrompt || geminiPromptText.isBlank() || ContactPickerValidator.isGeminiPromptAlreadyFilled(currentInputText, geminiPromptText)
+        if (isPromptFilled && !hasClickedGeminiSend) {
+            val sendBtn = findGeminiSendButton(rootNode, inputField)
+
+            // 若尚未觸發點擊，或距離上次點擊送出已超過 1.2 秒仍未看到發送成功跡象
+            if (sendAttemptCount == 0 || (now - sendAttemptTimeMs >= 1200L && sendAttemptCount < 5)) {
+                var clickedSend = false
+                if (sendBtn != null && sendBtn.isEnabled) {
+                    Log.i(TAG, "找到 Gemini 傳送按鈕 (嘗試 #${sendAttemptCount + 1})，執行點擊")
+                    clickedSend = clickNodeOrParent(sendBtn)
+                }
+
+                // 備援：透過無障礙軟鍵盤發送 ACTION_IME_ACTION
+                if (inputField != null && (!clickedSend || sendAttemptCount >= 1)) {
+                    Log.i(TAG, "透過輸入框觸發 ACTION_IME_ACTION 送出指令")
+                    inputField.performAction(AccessibilityNodeInfo.ACTION_IME_ACTION)
+                }
+
+                sendAttemptCount++
+                sendAttemptTimeMs = now
+                lastGeminiActionTimeMs = now
+            }
+
+            // 握手驗證：檢查是否已真正送出（輸入框文字已清空、出現停止生成按鈕、或送出按鈕已轉為停用）
+            val isStoppingPresent = hasGeminiStopGeneratingNode(rootNode)
+            val isInputCleared = inputField != null && (currentInputText.isBlank() || ContactPickerValidator.isGeminiPromptInputPlaceholder(currentInputText, null))
+            val isSendBtnGoneOrDisabled = sendBtn == null || !sendBtn.isEnabled
+
+            if (isStoppingPresent || (sendAttemptCount >= 1 && isInputCleared) || (sendAttemptCount >= 2 && isSendBtnGoneOrDisabled && now - sendAttemptTimeMs >= 800L)) {
+                Log.i(TAG, "確認 Gemini 已成功送出（isStopping=$isStoppingPresent, isInputCleared=$isInputCleared），切換至等待生成")
                 hasClickedGeminiSend = true
+                if (isStoppingPresent) hasSeenStopGenerating = true
                 geminiStep = GeminiAutoStep.WAIT_GENERATION_AND_COPY
                 geminiStepChangedTimeMs = now
                 lastGeminiActionTimeMs = now
@@ -676,10 +708,17 @@ class AudioRipAccessibilityService : AccessibilityService() {
     }
 
     private fun handleGeminiWaitAndCopy(rootNode: AccessibilityNodeInfo, now: Long) {
-        // 先等待至少 3.2 秒讓 Gemini 開始處理音訊並進入生成狀態
-        if (now - geminiStepChangedTimeMs < 3200L) return
-
         val isStoppingPresent = hasGeminiStopGeneratingNode(rootNode)
+        if (isStoppingPresent) {
+            hasSeenStopGenerating = true
+            // 只要仍在生成中，持續刷新候選文字與計時，確保不會提早擷取
+            lastCandidateTextChangeMs = now
+            return
+        }
+
+        // 先等待至少 3.0 秒讓 Gemini 啟動處理
+        if (now - geminiStepChangedTimeMs < 3000L) return
+
         val allTexts = mutableListOf<String>()
         collectNodeTexts(rootNode, allTexts)
         val bestCandidate = ContactPickerValidator.extractBestGeminiTranscriptFromTexts(allTexts, geminiPromptText)
@@ -690,16 +729,10 @@ class AudioRipAccessibilityService : AccessibilityService() {
             }
         }
 
-        if (isStoppingPresent) {
-            // Gemini 仍在生成中，持續等待
-            return
-        }
-
         // 尋找回答下方的「複製 / Copy」按鈕
         val copyBtn = findGeminiCopyButton(rootNode)
-        if (copyBtn != null && !hasClickedGeminiCopy && now - geminiStepChangedTimeMs >= 4000L) {
-            // 確認文字已穩定至少 1.2 秒再按複製
-            if (now - lastCandidateTextChangeMs >= 1200L) {
+        if (copyBtn != null && !hasClickedGeminiCopy && (now - geminiStepChangedTimeMs >= 3500L || hasSeenStopGenerating)) {
+            if (now - lastCandidateTextChangeMs >= 1000L) {
                 Log.i(TAG, "偵測到 Gemini 生成完畢且出現【複製】按鈕，自動點擊複製完整逐字稿！")
                 clickNodeOrParent(copyBtn)
                 hasClickedGeminiCopy = true
@@ -711,12 +744,16 @@ class AudioRipAccessibilityService : AccessibilityService() {
             }
         }
 
-        // 備援機制：若畫面已產出超過 40 字的逐字稿且連續 3.5 秒無變化、亦無停止按鈕，直接取回
+        // 嚴格備援機制：
+        // 1. 必須曾經看到停止按鈕 (hasSeenStopGenerating == true) 或等候已超過 12 秒
+        // 2. currentScraped 必須通過 isValidTranscriptResult 嚴格驗證 (絕對禁止黑名單如帳號身分)
+        // 3. 文字已穩定至少 3 秒
         val currentScraped = lastScrapedGeminiTranscript
-        if (!currentScraped.isNullOrBlank() && currentScraped.length >= 40 &&
-            now - lastCandidateTextChangeMs >= 3500L && now - geminiStepChangedTimeMs >= 6500L
+        if (ContactPickerValidator.isValidTranscriptResult(currentScraped, geminiPromptText) &&
+            (hasSeenStopGenerating || now - geminiStepChangedTimeMs >= 12000L) &&
+            now - lastCandidateTextChangeMs >= 3000L
         ) {
-            Log.i(TAG, "Gemini 回覆文字已穩定 (${currentScraped.length} 字)，自動取回逐字稿並返回")
+            Log.i(TAG, "Gemini 回覆文字已穩定 (${currentScraped!!.length} 字) 且通過黑名單檢驗，自動取回逐字稿並返回")
             pendingClipboardTranscriptRead = true
             geminiStep = GeminiAutoStep.RETURN_WITH_RESULT
             geminiStepChangedTimeMs = now
@@ -724,19 +761,24 @@ class AudioRipAccessibilityService : AccessibilityService() {
     }
 
     private fun finishGeminiJobAndReturn(scrapedText: String?) {
+        val safeText = if (ContactPickerValidator.isValidTranscriptResult(scrapedText, geminiPromptText)) {
+            scrapedText
+        } else {
+            null
+        }
         val cb = onGeminiResultCallback
         val callerPkg = geminiCallerPackage
         val videoName = geminiCallerVideoName
         val videoFolder = geminiCallerVideoFolder
         cancelGeminiAutoJob()
         pendingClipboardTranscriptRead = true
-        cb?.invoke(scrapedText)
+        cb?.invoke(safeText)
 
         if (!callerPkg.isNullOrBlank()) {
             try {
                 val returnIntent = Intent(ACTION_RECEIVE_TRANSCRIPT).apply {
                     setPackage(callerPkg)
-                    putExtra(EXTRA_TRANSCRIPT_TEXT, scrapedText ?: "")
+                    putExtra(EXTRA_TRANSCRIPT_TEXT, safeText ?: "")
                     putExtra(EXTRA_READ_CLIPBOARD_TRANSCRIPT, true)
                     putExtra(EXTRA_VIDEO_NAME, videoName ?: "")
                     putExtra(EXTRA_VIDEO_FOLDER, videoFolder ?: "")
@@ -791,7 +833,8 @@ class AudioRipAccessibilityService : AccessibilityService() {
         return null
     }
 
-    private fun findGeminiSendButton(root: AccessibilityNodeInfo): AccessibilityNodeInfo? {
+    private fun findGeminiSendButton(root: AccessibilityNodeInfo, inputField: AccessibilityNodeInfo? = null): AccessibilityNodeInfo? {
+        // 1. 常規遍歷：尋找符合 isGeminiSendButton 且啟用的節點
         val queue = ArrayDeque<AccessibilityNodeInfo>()
         queue.add(root)
         while (queue.isNotEmpty()) {
@@ -804,6 +847,23 @@ class AudioRipAccessibilityService : AccessibilityService() {
             }
             for (i in 0 until node.childCount) {
                 node.getChild(i)?.let { queue.add(it) }
+            }
+        }
+
+        // 2. 結構定位保底：輸入框同層右側或相鄰 Action Button
+        if (inputField != null) {
+            val parent = inputField.parent
+            if (parent != null) {
+                for (i in (parent.childCount - 1) downTo 0) {
+                    val child = parent.getChild(i) ?: continue
+                    if (child == inputField) continue
+                    if (child.isClickable && child.isEnabled) {
+                        val desc = child.contentDescription?.toString() ?: ""
+                        if (!desc.contains("麥克風") && !desc.contains("voice") && !desc.contains("mic")) {
+                            return child
+                        }
+                    }
+                }
             }
         }
         return null
