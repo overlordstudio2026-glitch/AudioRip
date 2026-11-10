@@ -679,10 +679,12 @@ class AudioRipAccessibilityService : AccessibilityService() {
                     clickedSend = clickNodeOrParent(sendBtn)
                 }
 
-                // 備援：透過無障礙軟鍵盤發送 ACTION_IME_ACTION
+                // 備援：透過無障礙軟鍵盤發送 ACTION_IME_ENTER
                 if (inputField != null && (!clickedSend || sendAttemptCount >= 1)) {
-                    Log.i(TAG, "透過輸入框觸發 ACTION_IME_ACTION 送出指令")
-                    inputField.performAction(AccessibilityNodeInfo.ACTION_IME_ACTION)
+                    if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.R) {
+                        Log.i(TAG, "透過輸入框觸發 ACTION_IME_ENTER 送出指令")
+                        inputField.performAction(AccessibilityNodeInfo.AccessibilityAction.ACTION_IME_ENTER.id)
+                    }
                 }
 
                 sendAttemptCount++
