@@ -143,4 +143,81 @@ class ContactPickerValidatorTest {
         assertTrue(ContactPickerValidator.isGeminiErrorNotice("Something went wrong, please try again", null))
         assertFalse(ContactPickerValidator.isGeminiErrorNotice("這是逐字稿內容，會議開始於十點", null))
     }
+
+    @Test
+    fun testGeminiUploadAwareComposerReadinessAndNonSendGuard() {
+        // 1. 音檔仍在上傳中（有進度圈或 Send 按鈕停用）時，必須維持 UPLOADING_MEDIA，絕不可誤判已送出
+        val uploadingState = ContactPickerValidator.evaluateGeminiComposerState(
+            hasStoppingButton = false,
+            hasPromptMovedToHistory = false,
+            isPromptFilledInInput = true,
+            isInputCleared = false,
+            hasEnabledSendButton = false,
+            hasDisabledSendButton = true,
+            hasUploadProgressIndicator = true,
+            hasExplicitUploadKeyword = false,
+            sendAttemptCount = 0
+        )
+        org.junit.Assert.assertEquals(
+            ContactPickerValidator.GeminiComposerReadiness.UPLOADING_MEDIA,
+            uploadingState
+        )
+
+        // 2. 即使送出嘗試多次，只要音檔仍在傳（進度圈或停用鈕）仍為 UPLOADING_MEDIA，絕不轉進等待生成
+        val stillUploadingEvenAfterAttempt = ContactPickerValidator.evaluateGeminiComposerState(
+            hasStoppingButton = false,
+            hasPromptMovedToHistory = false,
+            isPromptFilledInInput = true,
+            isInputCleared = false,
+            hasEnabledSendButton = false,
+            hasDisabledSendButton = true,
+            hasUploadProgressIndicator = false,
+            hasExplicitUploadKeyword = true,
+            sendAttemptCount = 3
+        )
+        org.junit.Assert.assertEquals(
+            ContactPickerValidator.GeminiComposerReadiness.UPLOADING_MEDIA,
+            stillUploadingEvenAfterAttempt
+        )
+
+        // 3. 上傳完成且 Send 按鈕轉為啟用 -> READY_TO_SEND
+        val readyState = ContactPickerValidator.evaluateGeminiComposerState(
+            hasStoppingButton = false,
+            hasPromptMovedToHistory = false,
+            isPromptFilledInInput = true,
+            isInputCleared = false,
+            hasEnabledSendButton = true,
+            hasDisabledSendButton = false,
+            hasUploadProgressIndicator = false,
+            hasExplicitUploadKeyword = false,
+            sendAttemptCount = 0
+        )
+        org.junit.Assert.assertEquals(
+            ContactPickerValidator.GeminiComposerReadiness.READY_TO_SEND,
+            readyState
+        )
+
+        // 4. 點擊送出後輸入框已清空或出現停止按鈕 -> SUBMITTED_OR_GENERATING
+        val submittedState = ContactPickerValidator.evaluateGeminiComposerState(
+            hasStoppingButton = false,
+            hasPromptMovedToHistory = true,
+            isPromptFilledInInput = false,
+            isInputCleared = true,
+            hasEnabledSendButton = false,
+            hasDisabledSendButton = false,
+            hasUploadProgressIndicator = false,
+            hasExplicitUploadKeyword = false,
+            sendAttemptCount = 1
+        )
+        org.junit.Assert.assertEquals(
+            ContactPickerValidator.GeminiComposerReadiness.SUBMITTED_OR_GENERATING,
+            submittedState
+        )
+
+        // 5. 結構定位不可誤點附件 / Live / 麥克風 / 移除鈕
+        assertTrue(ContactPickerValidator.isGeminiNonSendToolbarButton(null, "新增檔案", null))
+        assertTrue(ContactPickerValidator.isGeminiNonSendToolbarButton(null, "開啟 Gemini Live", null))
+        assertTrue(ContactPickerValidator.isGeminiNonSendToolbarButton(null, "移除附件", null))
+        assertFalse(ContactPickerValidator.isGeminiNonSendToolbarButton(null, "傳送提示", null))
+    }
 }

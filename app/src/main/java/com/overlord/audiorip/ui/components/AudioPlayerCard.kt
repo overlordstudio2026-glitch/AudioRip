@@ -403,6 +403,19 @@ fun AudioPlayerCard(
                             Row {
                                 FilledIconButton(
                                     onClick = {
+                                        onTranscriptionTextChange("")
+                                        Toast.makeText(context, "已一鍵清除逐字稿內容", Toast.LENGTH_SHORT).show()
+                                    },
+                                    modifier = Modifier.size(32.dp),
+                                    colors = IconButtonDefaults.filledIconButtonColors(containerColor = MaterialTheme.colorScheme.errorContainer)
+                                ) {
+                                    Icon(Icons.Default.Delete, contentDescription = "清除逐字稿", modifier = Modifier.size(16.dp), tint = MaterialTheme.colorScheme.onErrorContainer)
+                                }
+
+                                Spacer(modifier = Modifier.width(6.dp))
+
+                                FilledIconButton(
+                                    onClick = {
                                         val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
                                         clipboard.setPrimaryClip(ClipData.newPlainText("Transcript", transcript))
                                         Toast.makeText(context, "逐字稿已複製至剪貼簿！", Toast.LENGTH_SHORT).show()

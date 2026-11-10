@@ -435,4 +435,71 @@ object ContactPickerValidator {
         if (candidates.isEmpty()) return null
         return candidates.maxByOrNull { it.length }
     }
+
+    enum class GeminiComposerReadiness {
+        NEED_FILL_PROMPT,
+        UPLOADING_MEDIA,
+        READY_TO_SEND,
+        SUBMITTED_OR_GENERATING,
+        WAITING_UI_SETTLE
+    }
+
+    private val GEMINI_NON_SEND_TOOLBAR_KEYWORDS = listOf(
+        "麥克風", "mic", "voice", "語音", "live", "新增", "附加", "附件", "檔案",
+        "相機", "相簿", "圖片", "photo", "gallery", "camera", "attach", "add",
+        "移除", "刪除", "清除", "取消", "關閉", "remove", "delete", "clear", "cancel", "close",
+        "選單", "menu"
+    )
+
+    fun isGeminiNonSendToolbarButton(text: String?, contentDesc: String?, viewId: String?): Boolean {
+        val combined = "${text ?: ""} ${contentDesc ?: ""} ${viewId ?: ""}".lowercase()
+        if (isGeminiSendButton(text, contentDesc, viewId)) return false
+        return GEMINI_NON_SEND_TOOLBAR_KEYWORDS.any { combined.contains(it) }
+    }
+
+    private val GEMINI_UPLOADING_KEYWORDS = listOf(
+        "正在上傳", "上傳中", "處理檔案中", "uploading", "attaching", "processing file", "loading media"
+    )
+
+    fun isGeminiMediaUploadingKeyword(text: String?, contentDesc: String?): Boolean {
+        val t = text?.trim()?.lowercase() ?: ""
+        val d = contentDesc?.trim()?.lowercase() ?: ""
+        return GEMINI_UPLOADING_KEYWORDS.any { kw -> t.contains(kw) || d.contains(kw) }
+    }
+
+    /**
+     * 統一判定 Gemini 輸入區與附件上傳狀態：
+     * - 嚴格區分「音檔/媒體尚在上傳（Send 按鈕停用或顯示進度圈）」與「已真正送出」
+     * - 避免音檔仍在背景上傳時誤點擊或其他分支過早跳進等待生成階段
+     */
+    fun evaluateGeminiComposerState(
+        hasStoppingButton: Boolean,
+        hasPromptMovedToHistory: Boolean,
+        isPromptFilledInInput: Boolean,
+        isInputCleared: Boolean,
+        hasEnabledSendButton: Boolean,
+        hasDisabledSendButton: Boolean,
+        hasUploadProgressIndicator: Boolean,
+        hasExplicitUploadKeyword: Boolean,
+        sendAttemptCount: Int
+    ): GeminiComposerReadiness {
+        if (hasStoppingButton || hasPromptMovedToHistory) {
+            return GeminiComposerReadiness.SUBMITTED_OR_GENERATING
+        }
+        if (isInputCleared && sendAttemptCount >= 1 && !hasDisabledSendButton && !hasUploadProgressIndicator) {
+            return GeminiComposerReadiness.SUBMITTED_OR_GENERATING
+        }
+        if (!isPromptFilledInInput) {
+            return GeminiComposerReadiness.NEED_FILL_PROMPT
+        }
+        val isMediaStillUploading =
+            (hasUploadProgressIndicator || hasDisabledSendButton || hasExplicitUploadKeyword) && !hasEnabledSendButton
+        if (isMediaStillUploading) {
+            return GeminiComposerReadiness.UPLOADING_MEDIA
+        }
+        if (hasEnabledSendButton && !hasUploadProgressIndicator) {
+            return GeminiComposerReadiness.READY_TO_SEND
+        }
+        return GeminiComposerReadiness.WAITING_UI_SETTLE
+    }
 }
