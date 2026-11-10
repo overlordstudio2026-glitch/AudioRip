@@ -394,6 +394,26 @@ object ContactPickerValidator {
         return false
     }
 
+    val GEMINI_ERROR_KEYWORDS = listOf(
+        "發生問題，請稍後再試",
+        "發生錯誤，請稍後再試",
+        "請稍後再試",
+        "無法連線",
+        "網路連線中斷",
+        "something went wrong",
+        "try again later",
+        "unable to connect",
+        "network error"
+    )
+
+    fun isGeminiErrorNotice(text: String?, contentDesc: String?): Boolean {
+        val t = text?.trim()?.lowercase() ?: ""
+        val d = contentDesc?.trim()?.lowercase() ?: ""
+        return GEMINI_ERROR_KEYWORDS.any { kw ->
+            t.contains(kw) || d.contains(kw)
+        }
+    }
+
     /**
      * 從 Gemini 畫面所有文字節點中，過濾掉使用者發送的提示詞、系統黑名單與系統短標籤，萃取出最完整的逐字稿回覆文字
      */

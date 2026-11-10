@@ -136,5 +136,11 @@ class ContactPickerValidatorTest {
         assertTrue(ContactPickerValidator.isClipboardTimestampFreshForJob(clipTimestampMs = 2000L, jobStartTimeMs = 2000L))
         assertTrue(ContactPickerValidator.isClipboardTimestampFreshForJob(clipTimestampMs = 2500L, jobStartTimeMs = 2000L))
         assertFalse(ContactPickerValidator.isClipboardTimestampFreshForJob(clipTimestampMs = 2500L, jobStartTimeMs = 0L))
+
+        // 驗證 Gemini 異常錯誤提示即時判定
+        assertTrue(ContactPickerValidator.isGeminiErrorNotice("發生問題，請稍後再試", null))
+        assertTrue(ContactPickerValidator.isGeminiErrorNotice(null, "網路連線中斷，無法處理"))
+        assertTrue(ContactPickerValidator.isGeminiErrorNotice("Something went wrong, please try again", null))
+        assertFalse(ContactPickerValidator.isGeminiErrorNotice("這是逐字稿內容，會議開始於十點", null))
     }
 }

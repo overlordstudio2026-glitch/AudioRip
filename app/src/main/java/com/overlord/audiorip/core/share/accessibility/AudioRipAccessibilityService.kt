@@ -728,6 +728,14 @@ class AudioRipAccessibilityService : AccessibilityService() {
 
         val allTexts = mutableListOf<String>()
         collectNodeTexts(rootNode, allTexts)
+
+        // 檢查是否出現 Gemini 異常錯誤提示（如連線中斷、稍後再試）
+        val hasErrorNotice = allTexts.any { ContactPickerValidator.isGeminiErrorNotice(it, null) }
+        if (hasErrorNotice) {
+            Log.w(TAG, "偵測到 Gemini 畫面出現異常錯誤提示，提早結束並返回")
+            finishGeminiJobAndReturn(null, didClickCopy = false)
+            return
+        }
         val bestCandidate = ContactPickerValidator.extractBestGeminiTranscriptFromTexts(allTexts, geminiPromptText)
         if (!bestCandidate.isNullOrBlank()) {
             if (bestCandidate != lastScrapedGeminiTranscript) {
