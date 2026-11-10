@@ -759,21 +759,26 @@ class AudioRipAccessibilityService : AccessibilityService() {
             hasFilledGeminiPrompt = true
         }
 
-        val enabledExplicitSend = allNodes.firstOrNull { node ->
-            node.isVisibleToUser && node.isEnabled && ContactPickerValidator.isGeminiSendButton(
+        val enabledExplicitSendCandidates = allNodes.filter { node ->
+            !node.isEditable && node.isVisibleToUser && node.isEnabled && ContactPickerValidator.isGeminiSendButton(
                 node.text?.toString(),
                 node.contentDescription?.toString(),
                 node.viewIdResourceName
             )
+        }
+        val enabledExplicitSend = enabledExplicitSendCandidates.maxByOrNull { n ->
+            val r = android.graphics.Rect()
+            n.getBoundsInScreen(r)
+            r.right * 2 + r.bottom
         }
         val disabledExplicitSend = allNodes.firstOrNull { node ->
-            node.isVisibleToUser && !node.isEnabled && ContactPickerValidator.isGeminiSendButton(
+            !node.isEditable && node.isVisibleToUser && !node.isEnabled && ContactPickerValidator.isGeminiSendButton(
                 node.text?.toString(),
                 node.contentDescription?.toString(),
                 node.viewIdResourceName
             )
         }
-        val sendBtn = enabledExplicitSend ?: findStructuralSendButton(inputField)
+        val sendBtn = enabledExplicitSend ?: findStructuralSendButton(allNodes, inputField)
 
         val hasUploadProgress = allNodes.any { node ->
             node.isVisibleToUser && (node.className?.toString()?.contains("ProgressBar", ignoreCase = true) == true)
@@ -864,16 +869,21 @@ class AudioRipAccessibilityService : AccessibilityService() {
             }
 
             ContactPickerValidator.GeminiComposerReadiness.READY_TO_SEND -> {
-                if (sendAttemptCount == 0 || (now - sendAttemptTimeMs >= 1200L && sendAttemptCount < 8)) {
-                    showOrUpdateGeminiStatusOverlay("🚀 音檔已就緒，正在自動送出指令給 Gemini...")
+                if (sendAttemptCount == 0 || (now - sendAttemptTimeMs >= 1100L && sendAttemptCount < 20)) {
+                    val attemptDisplay = sendAttemptCount + 1
+                    showOrUpdateGeminiStatusOverlay("🚀 音檔已就緒，正在自動送出指令給 Gemini (#$attemptDisplay)...")
                     var clickedSend = false
                     if (sendBtn != null && sendBtn.isEnabled) {
-                        Log.i(TAG, "找到已啟用之 Gemini 傳送按鈕 (嘗試 #${sendAttemptCount + 1})，執行點擊")
+                        Log.i(TAG, "找到已啟用之 Gemini 傳送按鈕 (嘗試 #$attemptDisplay)，執行無障礙點擊與實體觸控備援")
                         clickedSend = clickNodeOrParent(sendBtn)
+                        // 第 2 次起或當 ACTION_CLICK 未能推動 Compose 按鈕時，直接以真實螢幕座標 dispatchGesture 點擊右下角向上箭頭
+                        if (!clickedSend || sendAttemptCount >= 1) {
+                            performTapGestureOnNode(sendBtn)
+                        }
                     }
-                    if (inputField != null && (!clickedSend || sendAttemptCount >= 1)) {
+                    if (inputField != null && sendBtn == null) {
                         if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.R) {
-                            Log.i(TAG, "透過輸入框觸發 ACTION_IME_ENTER 送出指令")
+                            Log.i(TAG, "未找到傳送鈕，透過輸入框觸發 ACTION_IME_ENTER")
                             inputField.performAction(AccessibilityNodeInfo.AccessibilityAction.ACTION_IME_ENTER.id)
                         }
                     }
@@ -967,33 +977,61 @@ class AudioRipAccessibilityService : AccessibilityService() {
         }
     }
 
-    private fun findStructuralSendButton(inputField: AccessibilityNodeInfo?): AccessibilityNodeInfo? {
+    private fun findStructuralSendButton(
+        allNodes: List<AccessibilityNodeInfo>,
+        inputField: AccessibilityNodeInfo?
+    ): AccessibilityNodeInfo? {
         if (inputField == null) return null
         val inputBounds = android.graphics.Rect()
         inputField.getBoundsInScreen(inputBounds)
+        if (inputBounds.isEmpty) return null
 
-        var container: AccessibilityNodeInfo? = inputField.parent
-        for (depth in 0 until 2) {
-            if (container == null) break
-            for (i in (container.childCount - 1) downTo 0) {
-                val child = container.getChild(i) ?: continue
-                if (child == inputField) continue
-                if (child.isClickable && child.isEnabled && child.isVisibleToUser) {
-                    val txt = child.text?.toString()
-                    val desc = child.contentDescription?.toString()
-                    val vid = child.viewIdResourceName
-                    if (ContactPickerValidator.isGeminiNonSendToolbarButton(txt, desc, vid)) continue
-                    val childBounds = android.graphics.Rect()
-                    child.getBoundsInScreen(childBounds)
-                    val isRightOrBelow = childBounds.left >= inputBounds.right - 30 || childBounds.top >= inputBounds.bottom - 10
-                    if (isRightOrBelow) {
-                        return child
-                    }
-                }
+        // 在整個 Compose/View Composer 卡片下方工具列（Strict: 中心 Y 位於輸入框中線以下，且寬高合理、靠右側）搜尋最右下方送出箭頭鈕
+        val candidates = ArrayList<Pair<AccessibilityNodeInfo, android.graphics.Rect>>()
+        for (node in allNodes) {
+            if (node == inputField || node.isEditable) continue
+            if (!node.isClickable || !node.isEnabled || !node.isVisibleToUser) continue
+            val txt = node.text?.toString()
+            val desc = node.contentDescription?.toString()
+            val vid = node.viewIdResourceName
+            if (ContactPickerValidator.isGeminiNonSendToolbarButton(txt, desc, vid)) continue
+            if (ContactPickerValidator.isGeminiStopGeneratingButton(txt, desc, vid)) continue
+
+            val r = android.graphics.Rect()
+            node.getBoundsInScreen(r)
+            if (r.isEmpty) continue
+            val w = r.width()
+            val h = r.height()
+            if (w !in 36..360 || h !in 36..360) continue
+
+            // 必須位於輸入框下半部或緊鄰其下方工具列（排除音檔 chip 右側的 X 關閉鈕），且位於右側半區
+            val isAtOrBelowComposerMid = r.centerY() >= inputBounds.centerY() - 20 && r.bottom <= inputBounds.bottom + 460
+            val isRightSide = r.centerX() >= inputBounds.left + (inputBounds.width() * 0.55f).toInt()
+            if (isAtOrBelowComposerMid && isRightSide) {
+                candidates.add(node to r)
             }
-            container = container.parent
         }
-        return null
+        return candidates.maxByOrNull { (_, r) -> r.right * 2 + r.bottom }?.first
+    }
+
+    private fun performTapGestureOnNode(node: AccessibilityNodeInfo): Boolean {
+        if (android.os.Build.VERSION.SDK_INT < android.os.Build.VERSION_CODES.N) return false
+        val rect = android.graphics.Rect()
+        node.getBoundsInScreen(rect)
+        if (rect.isEmpty || rect.width() <= 0 || rect.height() <= 0) return false
+        val x = rect.exactCenterX()
+        val y = rect.exactCenterY()
+        val path = android.graphics.Path().apply { moveTo(x, y) }
+        val stroke = android.accessibilityservice.GestureDescription.StrokeDescription(path, 0L, 60L)
+        val gesture = android.accessibilityservice.GestureDescription.Builder().addStroke(stroke).build()
+        return try {
+            val ok = dispatchGesture(gesture, null, null)
+            Log.i(TAG, "實體螢幕座標點擊 ($x, $y) dispatchGesture=$ok")
+            ok
+        } catch (e: Exception) {
+            Log.w(TAG, "dispatchGesture 異常: ${e.message}")
+            false
+        }
     }
 
     private fun finishGeminiJobAndReturn(scrapedText: String?) {
