@@ -1,0 +1,65 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+
+    <!-- Extraction Framing Brackets (Video to Audio Rip Concept) -->
+    <path
+        android:pathData="M30,34 C23,42 23,66 30,74"
+        android:strokeWidth="2.8"
+        android:strokeColor="#00E5FF"
+        android:strokeLineCap="round"
+        android:strokeAlpha="0.75" />
+
+    <path
+        android:pathData="M78,34 C85,42 85,66 78,74"
+        android:strokeWidth="2.8"
+        android:strokeColor="#7C4DFF"
+        android:strokeLineCap="round"
+        android:strokeAlpha="0.75" />
+
+    <!-- Audio Visualizer Spectrum Bars (Symmetric, Modern Rounded) -->
+    <!-- Bar 1 (Left flank) -->
+    <path
+        android:pathData="M37,47 a3,3 0 0,1 6,0 v14 a3,3 0 0,1 -6,0 z"
+        android:fillColor="#00B0FF" />
+
+    <!-- Bar 2 (Mid-left) -->
+    <path
+        android:pathData="M45,37 a3,3 0 0,1 6,0 v34 a3,3 0 0,1 -6,0 z"
+        android:fillColor="#00E5FF" />
+
+    <!-- Bar 3 (Center Peak - Emerald Tech Energy) -->
+    <path
+        android:pathData="M53,29 a3,3 0 0,1 6,0 v50 a3,3 0 0,1 -6,0 z"
+        android:fillColor="#00E676" />
+
+    <!-- Bar 4 (Mid-right) -->
+    <path
+        android:pathData="M61,37 a3,3 0 0,1 6,0 v34 a3,3 0 0,1 -6,0 z"
+        android:fillColor="#7C4DFF" />
+
+    <!-- Bar 5 (Right flank) -->
+    <path
+        android:pathData="M69,47 a3,3 0 0,1 6,0 v14 a3,3 0 0,1 -6,0 z"
+        android:fillColor="#B388FF" />
+
+    <!-- Dynamic Audio Sine Wave overlay across center -->
+    <path
+        android:pathData="M27,54 C35,48 43,60 54,54 C65,48 73,60 81,54"
+        android:strokeWidth="1.8"
+        android:strokeColor="#FFFFFF"
+        android:strokeAlpha="0.88"
+        android:strokeLineCap="round" />
+
+    <!-- Crystal Audio Clarity Sparkle (Top Right) -->
+    <path
+        android:pathData="M76,21 Q76,26 81,26 Q76,26 76,31 Q76,26 71,26 Q76,26 76,21 Z"
+        android:fillColor="#FFFFFF" />
+
+    <!-- Audio Pulse Center Sparkle -->
+    <path
+        android:pathData="M56,54 A2,2 0 1,0 56,53.9 Z"
+        android:fillColor="#FFFFFF" />
+</vector>
