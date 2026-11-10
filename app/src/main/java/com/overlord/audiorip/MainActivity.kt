@@ -67,12 +67,23 @@ class MainActivity : ComponentActivity() {
         if (hasFocus && AudioRipAccessibilityService.pendingClipboardTranscriptRead) {
             AudioRipAccessibilityService.pendingClipboardTranscriptRead = false
             val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
-            val clipText = clipboard?.primaryClip
-                ?.takeIf { it.itemCount > 0 }
+            val primaryClip = clipboard?.primaryClip?.takeIf { it.itemCount > 0 }
+            val clipTs = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                primaryClip?.description?.timestamp ?: 0L
+            } else {
+                0L
+            }
+            val rawClip = primaryClip
                 ?.getItemAt(0)
                 ?.coerceToText(this)
                 ?.toString()
                 ?.trim()
+            val clipText = rawClip?.takeIf {
+                com.overlord.audiorip.core.share.accessibility.ContactPickerValidator.isClipboardTimestampFreshForJob(
+                    clipTs,
+                    AudioRipAccessibilityService.lastGeminiJobStartTimeMs
+                )
+            }
             val fallbackText = AudioRipAccessibilityService.lastScrapedGeminiTranscript
             viewModel.onGeminiTranscriptRetrieved(
                 context = this,

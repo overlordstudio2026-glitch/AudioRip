@@ -130,5 +130,11 @@ class ContactPickerValidatorTest {
         assertTrue(ContactPickerValidator.isGeminiSendButton(null, "Send prompt", null))
         assertTrue(ContactPickerValidator.isGeminiSendButton(null, "向上箭頭", null))
         assertTrue(ContactPickerValidator.isGeminiSendButton(null, null, "com.google.android.apps.bard:id/send_button"))
+
+        // 驗證剪貼簿時間戳新鮮度檢查（防止誤讀任務啟動前使用者複製的無關文字）
+        assertFalse(ContactPickerValidator.isClipboardTimestampFreshForJob(clipTimestampMs = 1000L, jobStartTimeMs = 2000L))
+        assertTrue(ContactPickerValidator.isClipboardTimestampFreshForJob(clipTimestampMs = 2000L, jobStartTimeMs = 2000L))
+        assertTrue(ContactPickerValidator.isClipboardTimestampFreshForJob(clipTimestampMs = 2500L, jobStartTimeMs = 2000L))
+        assertFalse(ContactPickerValidator.isClipboardTimestampFreshForJob(clipTimestampMs = 2500L, jobStartTimeMs = 0L))
     }
 }

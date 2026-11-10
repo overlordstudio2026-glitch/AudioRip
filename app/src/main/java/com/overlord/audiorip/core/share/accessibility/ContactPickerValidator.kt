@@ -271,6 +271,15 @@ object ContactPickerValidator {
     }
 
     /**
+     * 檢查剪貼簿時間戳是否新於本次逐字稿任務啟動時間（防止誤讀任務開始前複製的無關文字）
+     */
+    fun isClipboardTimestampFreshForJob(clipTimestampMs: Long, jobStartTimeMs: Long): Boolean {
+        if (jobStartTimeMs <= 0L) return false
+        if (clipTimestampMs <= 0L) return true
+        return clipTimestampMs >= jobStartTimeMs
+    }
+
+    /**
      * 判定當前視窗套件是否為 Gemini App 或承載 Gemini 對話視窗的 Google App
      */
     fun isGeminiHostPackage(pkg: String?): Boolean {

@@ -91,6 +91,10 @@ class AudioRipAccessibilityService : AccessibilityService() {
         var pendingClipboardTranscriptRead: Boolean = false
 
         @Volatile
+        var lastGeminiJobStartTimeMs: Long = 0L
+            private set
+
+        @Volatile
         var lastScrapedGeminiTranscript: String? = null
 
         private var geminiPromptText: String = ""
@@ -166,6 +170,7 @@ class AudioRipAccessibilityService : AccessibilityService() {
             geminiCallerVideoName = callerVideoName
             geminiCallerVideoFolder = callerVideoFolder
             geminiJobStartTimeMs = now
+            lastGeminiJobStartTimeMs = now
             geminiStepChangedTimeMs = now
             hasFilledGeminiPrompt = false
             geminiPromptFillAttempts = 0
@@ -768,12 +773,13 @@ class AudioRipAccessibilityService : AccessibilityService() {
         } else {
             null
         }
+        val didClickCopy = hasClickedGeminiCopy
         val cb = onGeminiResultCallback
         val callerPkg = geminiCallerPackage
         val videoName = geminiCallerVideoName
         val videoFolder = geminiCallerVideoFolder
         cancelGeminiAutoJob()
-        pendingClipboardTranscriptRead = true
+        pendingClipboardTranscriptRead = didClickCopy || safeText != null
         cb?.invoke(safeText)
 
         if (!callerPkg.isNullOrBlank()) {
@@ -781,7 +787,7 @@ class AudioRipAccessibilityService : AccessibilityService() {
                 val returnIntent = Intent(ACTION_RECEIVE_TRANSCRIPT).apply {
                     setPackage(callerPkg)
                     putExtra(EXTRA_TRANSCRIPT_TEXT, safeText ?: "")
-                    putExtra(EXTRA_READ_CLIPBOARD_TRANSCRIPT, true)
+                    putExtra(EXTRA_READ_CLIPBOARD_TRANSCRIPT, didClickCopy)
                     putExtra(EXTRA_VIDEO_NAME, videoName ?: "")
                     putExtra(EXTRA_VIDEO_FOLDER, videoFolder ?: "")
                     addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP)
